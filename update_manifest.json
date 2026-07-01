@@ -1,0 +1,10 @@
+{
+  "version": "1.0.1",
+  "files": [
+    {
+      "path": "tools/publish_update.py",
+      "url": "https://raw.githubusercontent.com/eugeneknown/inventory-pro/main/tools/publish_update.py",
+      "sha256": "609eed49f056493d0cc2ca52149b19e5c9897587543ecb75eb411f9ee4590679"
+    }
+  ]
+}
