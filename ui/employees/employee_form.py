@@ -92,23 +92,46 @@ class EmployeeFormDialog(ctk.CTkToplevel):
         ctk.CTkLabel(form, text="Department", font=get_font(11),
                      text_color=COLORS["text_secondary"]).pack(anchor="w", pady=(8, 2))
         self._dept_var = ctk.StringVar(value="(None)")
-        ctk.CTkOptionMenu(
+        self._dept_combo = ctk.CTkComboBox(
             form, values=dept_options, variable=self._dept_var,
-            fg_color=COLORS["bg_input"], button_color=COLORS["border"],
+            fg_color=COLORS["bg_input"], border_color=COLORS["border"],
+            button_color=COLORS["border"], button_hover_color=COLORS["bg_hover"],
             text_color=COLORS["text_primary"], font=get_font(12),
-            corner_radius=8, height=38
-        ).pack(fill="x")
+            corner_radius=8, height=38, state="readonly"
+        )
+        self._dept_combo.pack(fill="x")
+        from ui.components.ctk_scrollable_dropdown import CTkScrollableDropdown
+        CTkScrollableDropdown(
+            self._dept_combo, values=dept_options,
+            command=lambda v: (self._dept_var.set(v), self._dept_combo.set(v)),
+            autocomplete=True, justify="left", height=200,
+            fg_color=COLORS["bg_card"], button_color=COLORS["bg_surface"],
+            hover_color=COLORS["bg_hover"], text_color=COLORS["text_primary"],
+            frame_border_color=COLORS["border"], scrollbar_button_color=COLORS["border"],
+            font=get_font(12),
+        )
 
         # Status
         ctk.CTkLabel(form, text="Status", font=get_font(11),
                      text_color=COLORS["text_secondary"]).pack(anchor="w", pady=(8, 2))
         self._status_var = ctk.StringVar(value="active")
-        ctk.CTkOptionMenu(
+        self._status_combo = ctk.CTkComboBox(
             form, values=["active", "inactive"], variable=self._status_var,
-            fg_color=COLORS["bg_input"], button_color=COLORS["border"],
+            fg_color=COLORS["bg_input"], border_color=COLORS["border"],
+            button_color=COLORS["border"], button_hover_color=COLORS["bg_hover"],
             text_color=COLORS["text_primary"], font=get_font(12),
-            corner_radius=8, height=38
-        ).pack(fill="x")
+            corner_radius=8, height=38, state="readonly"
+        )
+        self._status_combo.pack(fill="x")
+        CTkScrollableDropdown(
+            self._status_combo, values=["active", "inactive"],
+            command=lambda v: (self._status_var.set(v), self._status_combo.set(v)),
+            autocomplete=False, justify="left", height=100,
+            fg_color=COLORS["bg_card"], button_color=COLORS["bg_surface"],
+            hover_color=COLORS["bg_hover"], text_color=COLORS["text_primary"],
+            frame_border_color=COLORS["border"], scrollbar_button_color=COLORS["border"],
+            font=get_font(12),
+        )
 
         # Error
         self._error = ctk.CTkLabel(self, text="", font=get_font(11),

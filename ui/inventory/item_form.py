@@ -157,15 +157,26 @@ class ItemFormDialog(ctk.CTkToplevel):
         cats = self._repo.get_categories()
         self._cat_ids = {c["name"]: c["id"] for c in cats}
         self._cat_var = ctk.StringVar(value="(None)")
-        self._cat_menu = ctk.CTkOptionMenu(
-            self._form, values=["(None)"] + [c["name"] for c in cats],
+        cat_options = ["(None)"] + [c["name"] for c in cats]
+        self._cat_menu = ctk.CTkComboBox(
+            self._form, values=cat_options,
             variable=self._cat_var,
-            fg_color=COLORS["bg_input"], button_color=COLORS["border"],
+            fg_color=COLORS["bg_input"], border_color=COLORS["border"],
+            button_color=COLORS["border"], button_hover_color=COLORS["bg_hover"],
             text_color=COLORS["text_primary"], font=get_font(12),
-            corner_radius=8, height=38,
-            command=self._on_category_change
+            corner_radius=8, height=38, state="readonly"
         )
         self._cat_menu.pack(fill="x")
+        from ui.components.ctk_scrollable_dropdown import CTkScrollableDropdown
+        CTkScrollableDropdown(
+            self._cat_menu, values=cat_options,
+            command=lambda v: (self._cat_var.set(v), self._cat_menu.set(v), self._on_category_change(v)),
+            autocomplete=True, justify="left", height=200,
+            fg_color=COLORS["bg_card"], button_color=COLORS["bg_surface"],
+            hover_color=COLORS["bg_hover"], text_color=COLORS["text_primary"],
+            frame_border_color=COLORS["border"], scrollbar_button_color=COLORS["border"],
+            font=get_font(12),
+        )
 
         # ── Status ────────────────────────────────────────────────────────────
         ctk.CTkLabel(self._form, text="Status", font=get_font(11),
@@ -173,13 +184,25 @@ class ItemFormDialog(ctk.CTkToplevel):
         statuses = self._repo.get_statuses()
         self._status_ids = {s["name"]: s["id"] for s in statuses}
         self._status_var = ctk.StringVar(value="available")
-        ctk.CTkOptionMenu(
-            self._form, values=[s["name"] for s in statuses],
+        status_names = [s["name"] for s in statuses]
+        self._status_combo = ctk.CTkComboBox(
+            self._form, values=status_names,
             variable=self._status_var,
-            fg_color=COLORS["bg_input"], button_color=COLORS["border"],
+            fg_color=COLORS["bg_input"], border_color=COLORS["border"],
+            button_color=COLORS["border"], button_hover_color=COLORS["bg_hover"],
             text_color=COLORS["text_primary"], font=get_font(12),
-            corner_radius=8, height=38
-        ).pack(fill="x")
+            corner_radius=8, height=38, state="readonly"
+        )
+        self._status_combo.pack(fill="x")
+        CTkScrollableDropdown(
+            self._status_combo, values=status_names,
+            command=lambda v: (self._status_var.set(v), self._status_combo.set(v)),
+            autocomplete=False, justify="left", height=200,
+            fg_color=COLORS["bg_card"], button_color=COLORS["bg_surface"],
+            hover_color=COLORS["bg_hover"], text_color=COLORS["text_primary"],
+            frame_border_color=COLORS["border"], scrollbar_button_color=COLORS["border"],
+            font=get_font(12),
+        )
 
         # ── Other fields ──────────────────────────────────────────────────────
         for key, label, multiline in [
@@ -321,13 +344,24 @@ class ItemFormDialog(ctk.CTkToplevel):
         self._spec_fields["storage_gb"].grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=(2, 0))
 
         self._storage_type_var = ctk.StringVar(value="SSD")
-        ctk.CTkOptionMenu(
+        self._storage_type_combo = ctk.CTkComboBox(
             row3, values=["SSD", "HDD"],
             variable=self._storage_type_var,
-            fg_color=COLORS["bg_input"], button_color=COLORS["border"],
+            fg_color=COLORS["bg_input"], border_color=COLORS["border"],
+            button_color=COLORS["border"], button_hover_color=COLORS["bg_hover"],
             text_color=COLORS["text_primary"], font=get_font(11),
-            corner_radius=8, height=36, width=70
-        ).grid(row=1, column=2, padx=(8, 0), pady=(2, 0))
+            corner_radius=8, height=36, width=90, state="readonly"
+        )
+        self._storage_type_combo.grid(row=1, column=2, padx=(8, 0), pady=(2, 0))
+        CTkScrollableDropdown(
+            self._storage_type_combo, values=["SSD", "HDD"],
+            command=lambda v: (self._storage_type_var.set(v), self._storage_type_combo.set(v)),
+            autocomplete=False, justify="left", height=90,
+            fg_color=COLORS["bg_card"], button_color=COLORS["bg_surface"],
+            hover_color=COLORS["bg_hover"], text_color=COLORS["text_primary"],
+            frame_border_color=COLORS["border"], scrollbar_button_color=COLORS["border"],
+            font=get_font(11),
+        )
         self._spec_fields["storage_type"] = self._storage_type_var
 
         # GPU + Year row
@@ -517,11 +551,11 @@ class ItemFormDialog(ctk.CTkToplevel):
                 return w.get().strip()
             return w.get().strip() or None
 
-        serial = get_val("serial_number")
+        serial = get_val("serial_number") or None
         name   = get_val("name")
 
-        if not serial or not name:
-            self._error.configure(text="Serial Number and Item Name are required.")
+        if not name:
+            self._error.configure(text="Item Name is required.")
             return
 
         price_str = get_val("purchase_price")

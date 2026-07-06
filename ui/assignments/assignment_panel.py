@@ -10,6 +10,7 @@ from data.repositories.item_repo import ItemRepository
 from data.repositories.audit_repo import AuditRepository
 from ui.components import (SectionHeader, DataTable, ConfirmDialog,
                             Toast, EmptyState, FilterDropdown, SearchBar)
+import threading
 
 
 class AssignmentPanel(ctk.CTkFrame):
@@ -22,6 +23,8 @@ class AssignmentPanel(ctk.CTkFrame):
         self._item_repo = ItemRepository()
         self._audit = AuditRepository()
         self._show_active_only = True
+        self._search_query = ""
+        self._fetch_id = 0
         self._build()
         self._load()
 
@@ -65,6 +68,12 @@ class AssignmentPanel(ctk.CTkFrame):
             command=self._on_toggle
         ).pack(side="left")
 
+        from ui.components import SearchBar
+        SearchBar(
+            toggle_frame, placeholder="Search assignments...",
+            on_change=self._on_search
+        ).pack(side="right", fill="x", expand=False, padx=(16, 0))
+
         # Table
         self._table_container = ctk.CTkFrame(self, fg_color="transparent")
         self._table_container.pack(fill="both", expand=True)
@@ -73,11 +82,42 @@ class AssignmentPanel(ctk.CTkFrame):
         self._show_active_only = (value == "Active")
         self._load()
 
+    def _on_search(self, q: str):
+        self._search_query = q
+        self._load()
+
     def _load(self):
+        self._fetch_id += 1
+        current_fetch = self._fetch_id
+
         for w in self._table_container.winfo_children():
             w.destroy()
 
-        assignments = self._assign_repo.get_all(active_only=self._show_active_only)
+        ctk.CTkLabel(
+            self._table_container,
+            text="Loading...",
+            font=get_font(14),
+            text_color=COLORS["text_secondary"]
+        ).pack(expand=True)
+
+        active_only = self._show_active_only
+        search_query = self._search_query
+
+        def fetch():
+            assignments = self._assign_repo.get_all(
+                active_only=active_only,
+                search=search_query or None
+            )
+            self.after(0, lambda: self._render(assignments, current_fetch))
+
+        threading.Thread(target=fetch, daemon=True).start()
+
+    def _render(self, assignments, fetch_id=None):
+        if fetch_id is not None and fetch_id != self._fetch_id:
+            return
+
+        for w in self._table_container.winfo_children():
+            w.destroy()
 
         if not assignments:
             EmptyState(
@@ -89,13 +129,14 @@ class AssignmentPanel(ctk.CTkFrame):
             return
 
         columns = [
-            ("item_serial",    "Serial Number", 140),
-            ("item_name",      "Item",          160),
-            ("employee_name",  "Employee",      160),
+            ("item_id",        "Item ID",       100),
+            ("item_serial",    "Serial Number", 130),
+            ("item_name",      "Item",          150),
+            ("employee_name",  "Employee",      150),
             ("employee_dept",  "Department",    120),
-            ("assigned_by",    "Assigned By",   120),
-            ("assigned_at",    "Date Assigned", 140),
-            ("returned_at",    "Returned",      120),
+            ("assigned_by",    "Assigned By",   110),
+            ("assigned_at",    "Date Assigned", 130),
+            ("returned_at",    "Returned",      110),
         ]
 
         rows = []
@@ -103,6 +144,7 @@ class AssignmentPanel(ctk.CTkFrame):
             assigned_ts = a.assigned_at[:10] if a.assigned_at else "—"
             returned_ts = a.returned_at[:10] if a.returned_at else "—"
             rows.append({
+                "item_id":       a.item_item_id or "—",
                 "item_serial":   a.item_serial or "—",
                 "item_name":     a.item_name or "—",
                 "employee_name": a.employee_name or "—",
@@ -166,8 +208,8 @@ class AssignDialog(ctk.CTkToplevel):
         self._audit = AuditRepository()
 
         self.title("New Assignment")
-        self.geometry("480x460")
-        self.minsize(420, 420)
+        self.geometry("500x500")
+        self.minsize(440, 460)
         self.resizable(False, False)
         self.configure(fg_color=COLORS["bg_card"])
         self.grab_set()
@@ -215,16 +257,33 @@ class AssignDialog(ctk.CTkToplevel):
                      text_color=COLORS["text_secondary"]).pack(anchor="w")
         employees = self._emp_repo.get_all(status="active")
         self._emp_map = {f"{e.full_name} ({e.employee_id})": e.id for e in employees}
-        self._emp_var = ctk.StringVar(
-            value=list(self._emp_map.keys())[0] if self._emp_map else "(None)"
-        )
-        ctk.CTkOptionMenu(
-            form, values=list(self._emp_map.keys()) or ["No employees"],
-            variable=self._emp_var,
-            fg_color=COLORS["bg_input"], button_color=COLORS["border"],
+        emp_names = list(self._emp_map.keys()) or ["No employees"]
+
+        self._emp_combo = ctk.CTkComboBox(
+            form, values=emp_names,
+            fg_color=COLORS["bg_input"], border_color=COLORS["border"],
+            button_color=COLORS["border"], button_hover_color=COLORS["bg_hover"],
             text_color=COLORS["text_primary"], font=get_font(12),
-            corner_radius=8, height=40
-        ).pack(fill="x", pady=(4, 16))
+            corner_radius=8, height=40, state="readonly"
+        )
+        if emp_names:
+            self._emp_combo.set(emp_names[0])
+        self._emp_combo.pack(fill="x", pady=(4, 16))
+
+        from ui.components.ctk_scrollable_dropdown import CTkScrollableDropdown
+        CTkScrollableDropdown(
+            self._emp_combo, values=emp_names,
+            command=self._emp_combo.set,
+            autocomplete=True, justify="left",
+            height=220,
+            fg_color=COLORS["bg_card"],
+            button_color=COLORS["bg_surface"],
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_primary"],
+            frame_border_color=COLORS["border"],
+            scrollbar_button_color=COLORS["border"],
+            font=get_font(12),
+        )
 
         # Item selection (available only)
         ctk.CTkLabel(form, text="Item (Available only) *", font=get_font(11),
@@ -235,16 +294,32 @@ class AssignDialog(ctk.CTkToplevel):
         )
         items = self._item_repo.get_all(status_id=avail_id)
         self._item_map = {f"{i.name} — {i.serial_number}": i.id for i in items}
-        self._item_var = ctk.StringVar(
-            value=list(self._item_map.keys())[0] if self._item_map else "(None)"
-        )
-        ctk.CTkOptionMenu(
-            form, values=list(self._item_map.keys()) or ["No available items"],
-            variable=self._item_var,
-            fg_color=COLORS["bg_input"], button_color=COLORS["border"],
+        item_names = list(self._item_map.keys()) or ["No available items"]
+
+        self._item_combo = ctk.CTkComboBox(
+            form, values=item_names,
+            fg_color=COLORS["bg_input"], border_color=COLORS["border"],
+            button_color=COLORS["border"], button_hover_color=COLORS["bg_hover"],
             text_color=COLORS["text_primary"], font=get_font(12),
-            corner_radius=8, height=40
-        ).pack(fill="x", pady=(4, 16))
+            corner_radius=8, height=40, state="readonly"
+        )
+        if item_names:
+            self._item_combo.set(item_names[0])
+        self._item_combo.pack(fill="x", pady=(4, 16))
+
+        CTkScrollableDropdown(
+            self._item_combo, values=item_names,
+            command=self._item_combo.set,
+            autocomplete=True, justify="left",
+            height=220,
+            fg_color=COLORS["bg_card"],
+            button_color=COLORS["bg_surface"],
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_primary"],
+            frame_border_color=COLORS["border"],
+            scrollbar_button_color=COLORS["border"],
+            font=get_font(12),
+        )
 
         # Notes
         ctk.CTkLabel(form, text="Notes (optional)", font=get_font(11),
@@ -257,8 +332,8 @@ class AssignDialog(ctk.CTkToplevel):
         self._notes.pack(fill="x", pady=(4, 0))
 
     def _save(self):
-        emp_key = self._emp_var.get()
-        item_key = self._item_var.get()
+        emp_key = self._emp_combo.get()
+        item_key = self._item_combo.get()
         emp_id = self._emp_map.get(emp_key)
         item_id = self._item_map.get(item_key)
 

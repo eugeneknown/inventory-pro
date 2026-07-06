@@ -57,8 +57,9 @@ class Employee:
 @dataclass
 class Item:
     id: str
-    serial_number: str
     name: str
+    item_id: str = ""
+    serial_number: Optional[str] = None
     serial_source: str = "manual"
     brand: Optional[str] = None
     model: Optional[str] = None
@@ -94,6 +95,7 @@ class Assignment:
     # Joined fields
     item_name: Optional[str] = None
     item_serial: Optional[str] = None
+    item_item_id: Optional[str] = None
     employee_name: Optional[str] = None
     employee_dept: Optional[str] = None
 

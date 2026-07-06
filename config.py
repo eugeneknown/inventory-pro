@@ -8,10 +8,18 @@ import platform
 
 # ── App Metadata ──────────────────────────────────────────
 APP_NAME = "InventoryPro"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1"
+
+import sys
 
 # ── Paths ──────────────────────────────────────────────────
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, 'frozen', False):
+    # Running as a compiled EXE
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    # Running as a python script
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 DATA_DIR = os.path.join(BASE_DIR, "data", "local_db")
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 LABELS_DIR = os.path.join(BASE_DIR, "labels")
@@ -35,9 +43,14 @@ def get_machine_id() -> str:
 MACHINE_ID = get_machine_id()
 
 # ── Google Sheets ─────────────────────────────────────────
-SHEETS_CORE_NAME = "InventoryPro - Core Data"
-SHEETS_AUDIT_NAME = "InventoryPro - Audit Log"
-SYNC_INTERVAL_SECONDS = 30
+if getattr(sys, 'frozen', False):
+    SHEETS_CORE_NAME = "InventoryPro - Core Data"
+    SHEETS_AUDIT_NAME = "InventoryPro - Audit Log"
+else:
+    SHEETS_CORE_NAME = "InventoryPro - Core Data - TESTING"
+    SHEETS_AUDIT_NAME = "InventoryPro - Audit Log - TESTING"
+
+SYNC_INTERVAL_SECONDS = 300  # 5 minutes — reduces API quota usage
 
 # ── Serial Number ─────────────────────────────────────────
 SERIAL_PREFIX = "INV"

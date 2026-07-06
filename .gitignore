@@ -3,6 +3,13 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Credentials & Secrets — NEVER COMMIT THESE!
+google_credentials.json
+*credentials*.json
+*service_account*.json
+*.key
+*.pem
+
 # Virtual Environments
 venv/
 .venv/
@@ -33,6 +40,8 @@ Thumbs.db
 dist/
 build/
 *.egg-info/
+*.spec
 
-# Google AI Studio
-google_credentials.json
+# Build assets (generated, not source)
+assets/icon.ico
+tools/convert_icon.py

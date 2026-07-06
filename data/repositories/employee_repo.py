@@ -80,6 +80,55 @@ class EmployeeRepository:
         conn.close()
         return self.get_by_id(emp_id)
 
+    def create_many(self, data_list: list[dict]) -> list[Employee]:
+        if not data_list: return []
+        conn = get_connection()
+        c = conn.cursor()
+        now = datetime.utcnow().isoformat()
+        
+        current_next_id = self.next_employee_id()
+        if current_next_id.startswith("EMP-"):
+            try:
+                next_num = int(current_next_id.split("-")[1])
+            except:
+                next_num = 1
+        else:
+            next_num = 1
+        
+        insert_records = []
+        created_emps = []
+        for data in data_list:
+            emp_id = str(uuid.uuid4())
+            
+            assigned_emp_id = data.get("employee_id")
+            if not assigned_emp_id:
+                assigned_emp_id = f"EMP-{next_num:03d}"
+                next_num += 1
+                
+            insert_records.append((
+                emp_id, assigned_emp_id, data["full_name"],
+                data.get("department_id"), data.get("position"),
+                data.get("email"), data.get("phone"),
+                data.get("status", "active"), data.get("notes"),
+                now, now
+            ))
+            created_emps.append(Employee(
+                id=emp_id, employee_id=assigned_emp_id, full_name=data["full_name"],
+                department_id=data.get("department_id"), position=data.get("position"),
+                email=data.get("email"), phone=data.get("phone"),
+                status=data.get("status", "active"), notes=data.get("notes"),
+                created_at=now, updated_at=now
+            ))
+            
+        c.executemany("""
+            INSERT INTO employees
+                (id, employee_id, full_name, department_id, position, email, phone, status, notes, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, insert_records)
+        conn.commit()
+        conn.close()
+        return created_emps
+
     def update(self, employee_id: str, data: dict) -> Optional[Employee]:
         conn = get_connection()
         c = conn.cursor()

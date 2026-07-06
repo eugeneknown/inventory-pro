@@ -50,6 +50,7 @@ class SettingsPage(ctk.CTkFrame):
         tabs.add("Organization")
         if self._user.get("role") == "admin":
             tabs.add("Integrations")
+            tabs.add("System Logs")
 
         self._build_list_tab(tabs.tab("Departments"), "departments", "name")
         self._build_list_tab(tabs.tab("Categories"), "categories", "name")
@@ -59,6 +60,7 @@ class SettingsPage(ctk.CTkFrame):
         self._build_org_tab(tabs.tab("Organization"))
         if self._user.get("role") == "admin":
             self._build_integrations_tab(tabs.tab("Integrations"))
+            self._build_logs_tab(tabs.tab("System Logs"))
 
     # ── Generic list tab (Departments / Categories) ───────────────────────────
     def _build_list_tab(self, parent, table: str, col: str):
@@ -552,7 +554,7 @@ class SettingsPage(ctk.CTkFrame):
         conn = get_connection()
         c = conn.cursor()
         settings = {}
-        for key in ("discord_webhook_url", "github_repo", "github_token", "gemini_api_key"):
+        for key in ("discord_webhook_url", "github_repo", "github_token", "gemini_api_key", "gemini_model"):
             c.execute("SELECT value FROM app_settings WHERE key=?", (key,))
             row = c.fetchone()
             settings[key] = row["value"] if row else ""
@@ -645,6 +647,7 @@ class SettingsPage(ctk.CTkFrame):
             "Get a free key from aistudio.google.com to enable auto-filling computer and item specs automatically."
         )
         gemini_entry = _make_field("Gemini API Key", "Paste your Gemini API Key here", settings["gemini_api_key"], show="•")
+        gemini_model_entry = _make_field("Gemini Model Version", "e.g. gemini-2.5-flash", settings["gemini_model"] or "gemini-2.5-flash")
 
         _divider()
 
@@ -655,6 +658,7 @@ class SettingsPage(ctk.CTkFrame):
                 "github_repo":         repo_entry.get().strip(),
                 "github_token":        token_entry.get().strip(),
                 "gemini_api_key":      gemini_entry.get().strip(),
+                "gemini_model":        gemini_model_entry.get().strip() or "gemini-2.5-flash",
             }
             conn = get_connection()
             for key, value in data.items():
@@ -679,10 +683,80 @@ class SettingsPage(ctk.CTkFrame):
             fg_color=COLORS["primary"], hover_color=COLORS["primary_hover"],
             corner_radius=8, height=42,
             command=save_all
-        ).pack(anchor="w")
+        ).pack(fill="x", pady=(8, 20))
 
 
-# ── Add User Dialog ───────────────────────────────────────────────────────────
+    # ── System Logs Tab ────────────────────────────────────────────────────────
+    def _build_logs_tab(self, parent):
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        frame.pack(fill="both", expand=True, padx=20, pady=16)
+
+        ctk.CTkLabel(
+            frame, text="Local Error & Event Logs", 
+            font=get_font(14, "bold"), text_color=COLORS["text_primary"]
+        ).pack(anchor="w", pady=(0, 8))
+
+        # Textbox for logs
+        log_box = ctk.CTkTextbox(
+            frame, fg_color=COLORS["bg_input"], border_color=COLORS["border"],
+            text_color=COLORS["text_secondary"], font=("Consolas", 11),
+            corner_radius=8, wrap="word"
+        )
+        log_box.pack(fill="both", expand=True, pady=(0, 16))
+
+        def refresh_logs():
+            import os
+            from config import DATA_DIR
+            log_file = os.path.join(DATA_DIR, "system_errors.log")
+            log_box.delete("1.0", "end")
+            if os.path.exists(log_file):
+                try:
+                    with open(log_file, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    if not content.strip():
+                        log_box.insert("end", "Log file is empty.")
+                    else:
+                        log_box.insert("end", content)
+                except Exception as e:
+                    log_box.insert("end", f"Could not read logs: {e}")
+            else:
+                log_box.insert("end", "No logs recorded yet.")
+            log_box.see("end")
+
+        def clear_logs():
+            import os
+            from config import DATA_DIR
+            log_file = os.path.join(DATA_DIR, "system_errors.log")
+            if os.path.exists(log_file):
+                try:
+                    os.remove(log_file)
+                except Exception:
+                    pass
+            refresh_logs()
+            Toast.show(self, "Logs cleared.", "success")
+
+        btn_row = ctk.CTkFrame(frame, fg_color="transparent")
+        btn_row.pack(fill="x")
+
+        ctk.CTkButton(
+            btn_row, text="Refresh Logs",
+            fg_color=COLORS["bg_surface"], hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_primary"], font=get_font(11),
+            corner_radius=8, height=34,
+            command=refresh_logs
+        ).pack(side="left", padx=(0, 8))
+
+        ctk.CTkButton(
+            btn_row, text="Clear Logs",
+            fg_color=COLORS["danger"], hover_color=COLORS.get("danger_hover", "#B91C1C"),
+            font=get_font(11, "bold"), corner_radius=8, height=34,
+            command=clear_logs
+        ).pack(side="left")
+
+        # Initial load
+        refresh_logs()
+
+    # ── User Dialog ───────────────────────────────────────────────────────────
 class AddUserDialog(ctk.CTkToplevel):
 
     def __init__(self, parent, on_save=None):
@@ -728,13 +802,25 @@ class AddUserDialog(ctk.CTkToplevel):
         ctk.CTkLabel(form, text="Role", font=get_font(11),
                      text_color=COLORS["text_secondary"]).pack(anchor="w", pady=(8, 2))
         self._role_var = ctk.StringVar(value="manager")
-        ctk.CTkOptionMenu(
+        self._role_combo = ctk.CTkComboBox(
             form, values=["admin", "manager"],
             variable=self._role_var,
-            fg_color=COLORS["bg_input"], button_color=COLORS["border"],
+            fg_color=COLORS["bg_input"], border_color=COLORS["border"],
+            button_color=COLORS["border"], button_hover_color=COLORS["bg_hover"],
             text_color=COLORS["text_primary"], font=get_font(12),
-            corner_radius=8, height=38
-        ).pack(fill="x")
+            corner_radius=8, height=38, state="readonly"
+        )
+        self._role_combo.pack(fill="x")
+        from ui.components.ctk_scrollable_dropdown import CTkScrollableDropdown
+        CTkScrollableDropdown(
+            self._role_combo, values=["admin", "manager"],
+            command=lambda v: (self._role_var.set(v), self._role_combo.set(v)),
+            autocomplete=False, justify="left", height=100,
+            fg_color=COLORS["bg_card"], button_color=COLORS["bg_surface"],
+            hover_color=COLORS["bg_hover"], text_color=COLORS["text_primary"],
+            frame_border_color=COLORS["border"], scrollbar_button_color=COLORS["border"],
+            font=get_font(12),
+        )
 
         self._error = ctk.CTkLabel(self, text="", font=get_font(11),
                                    text_color=COLORS["danger"])

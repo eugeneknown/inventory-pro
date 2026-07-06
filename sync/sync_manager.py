@@ -48,6 +48,8 @@ class SyncManager:
         self._client = None
         self._lock = threading.Lock()
         self._last_sync: Optional[str] = None
+        self._sheet_cache: dict = {}          # cache per sync cycle: ws.id → records list
+        self._remote_modified_at: str = ""   # last known remote sheet modifiedTime
 
     @property
     def state(self) -> SyncState:
@@ -87,26 +89,56 @@ class SyncManager:
             self._wake_event.clear()
 
     def _sync_cycle(self):
-        """One full sync cycle: check online → push → pull."""
+        """
+        Sheet-first sync cycle:
+          1. Fetch all rows from Google Sheets (one read per worksheet).
+          2. Upsert any rows the local DB is missing (sheet → local).
+          3. Push any rows the sheet is missing (local → sheet).
+        No audit queue needed — the comparison IS the diff.
+        """
         if not self._check_online():
             self._set_state(SyncState.OFFLINE)
             return
 
+        self._sheet_cache.clear()
         self._set_state(SyncState.SYNCING)
         try:
             client = self._get_client()
             if not client:
                 self._set_state(SyncState.NOT_CONFIGURED)
                 return
-            self._push_pending(client)
+
+            from config import SHEETS_CORE_NAME
+            try:
+                sh = client.open(SHEETS_CORE_NAME)
+            except Exception:
+                sh = client.create(SHEETS_CORE_NAME)
+
+            # ── Backup Local Data to Sheet ────────────────────────────────────
+            self._sync_employees(sh)
+            self._sync_items(sh)
+            self._sync_assignments(sh)
+            self._sync_audit_log(client)
             self._push_computer_scores(client)
-            self._pull_remote(client)
+
             from datetime import datetime
             self._last_sync = datetime.utcnow().isoformat()
             self._set_state(SyncState.ONLINE)
         except Exception as e:
+            import sys
+            from utils.error_reporter import report_exception
             print(f"[Sync] Cycle error: {e}")
+            report_exception(*sys.exc_info())
             self._set_state(SyncState.OFFLINE)
+
+    def _has_pending_local_changes(self) -> bool:
+        """Check if any local records need to be pushed to the sheet."""
+        try:
+            from data.repositories.audit_repo import AuditRepository
+            pending = AuditRepository().get_pending_sync()
+            return len(pending) > 0
+        except Exception:
+            return False
 
     def _check_online(self) -> bool:
         """Quick connectivity check."""
@@ -129,7 +161,7 @@ class SyncManager:
             from google.oauth2.service_account import Credentials
             scopes = [
                 "https://www.googleapis.com/auth/spreadsheets",
-                "https://www.googleapis.com/auth/drive",
+                "https://www.googleapis.com/auth/drive.metadata.readonly",
             ]
             creds = Credentials.from_service_account_file(
                 CREDENTIALS_PATH, scopes=scopes
@@ -139,6 +171,211 @@ class SyncManager:
         except Exception as e:
             print(f"[Sync] Auth error: {e}")
             return None
+
+    # ── Sheet-First Bidirectional Sync ────────────────────────────────────────
+
+    def _sync_employees(self, sh):
+        """One-way sync: DB is master, Sheet is read-only backup."""
+        try:
+            ws = sh.worksheet("Employees")
+        except Exception:
+            ws = sh.add_worksheet("Employees", rows=1000, cols=20)
+
+        from data.database import get_connection
+        from data.repositories.employee_repo import EmployeeRepository
+        repo = EmployeeRepository()
+        conn = get_connection()
+        c = conn.cursor()
+
+        c.execute("SELECT id, employee_id, full_name, department_id, position, email, phone, status, notes, created_at, updated_at FROM employees")
+        local_rows = c.fetchall()
+        conn.close()
+
+        depts = repo.get_departments()
+        dept_id_to_name = {d["id"]: d["name"] for d in depts}
+
+        headers = ["employee_id", "full_name", "department", "position", "email", "phone", "status", "notes", "created_at", "updated_at"]
+        rows_to_push = [headers]
+        
+        for r in local_rows:
+            dept_name = dept_id_to_name.get(r[3], "") if r[3] else ""
+            row_data = [
+                r[1], r[2], dept_name, r[4] or "", r[5] or "", r[6] or "", 
+                r[7] or "", r[8] or "", r[9] or "", r[10] or ""
+            ]
+            rows_to_push.append([str(x) for x in row_data])
+
+        try:
+            ws.clear()
+            try:
+                ws.update(range_name='A1', values=rows_to_push)
+            except TypeError:
+                # Fallback for older gspread versions
+                ws.update('A1', rows_to_push)
+            print(f"[Sync] Overwrote Employees sheet with {len(rows_to_push)-1} record(s).")
+        except Exception as e:
+            print(f"[Sync] Failed to backup employees to sheet: {e}")
+
+    def _sync_items(self, sh):
+        """One-way sync: DB is master, Sheet is read-only backup."""
+        try:
+            ws = sh.worksheet("Items")
+        except Exception:
+            ws = sh.add_worksheet("Items", rows=1000, cols=25)
+
+        from data.database import get_connection
+        from data.repositories.item_repo import ItemRepository
+        repo = ItemRepository()
+        conn = get_connection()
+        c = conn.cursor()
+
+        c.execute("SELECT id, item_id, serial_number, name, brand, model, description, purchase_date, purchase_price, notes, created_at, updated_at, category_id, status_id FROM items")
+        local_rows = c.fetchall()
+        conn.close()
+
+        categories = repo.get_categories()
+        cat_id_to_name = {c["id"]: c["name"] for c in categories}
+        statuses = repo.get_statuses()
+        stat_id_to_name = {s["id"]: s["name"].replace("_", " ").title() for s in statuses}
+
+        headers = ["item_id", "serial_number", "name", "brand", "model", "category", "status", "description", "purchase_date", "purchase_price", "notes", "created_at", "updated_at"]
+        rows_to_push = [headers]
+
+        for r in local_rows:
+            row_data = [
+                r[1], r[2] or "", r[3], r[4] or "", r[5] or "",
+                cat_id_to_name.get(r[12], "") if r[12] else "",
+                stat_id_to_name.get(r[13], "") if r[13] else "",
+                r[6] or "", r[7] or "", str(r[8]) if r[8] else "",
+                r[9] or "", r[10] or "", r[11] or ""
+            ]
+            rows_to_push.append([str(x) for x in row_data])
+
+        try:
+            ws.clear()
+            try:
+                ws.update(range_name='A1', values=rows_to_push)
+            except TypeError:
+                ws.update('A1', rows_to_push)
+            print(f"[Sync] Overwrote Items sheet with {len(rows_to_push)-1} record(s).")
+        except Exception as e:
+            print(f"[Sync] Failed to backup items to sheet: {e}")
+
+    def _sync_assignments(self, sh):
+        """One-way sync: DB is master, Sheet is read-only backup."""
+        try:
+            ws = sh.worksheet("Assignments")
+        except Exception:
+            ws = sh.add_worksheet("Assignments", rows=1000, cols=15)
+
+        from data.database import get_connection
+        conn = get_connection()
+        c = conn.cursor()
+
+        c.execute("SELECT id, item_id, employee_id, assigned_at, assigned_by, notes, is_active FROM assignments")
+        local_rows = c.fetchall()
+
+        c.execute("SELECT id, item_id, serial_number, name FROM items")
+        item_rows = c.fetchall()
+        item_id_to_label = {r[0]: r[1] or r[3] for r in item_rows}
+
+        c.execute("SELECT id, employee_id, full_name FROM employees")
+        emp_rows = c.fetchall()
+        emp_id_to_label = {r[0]: r[1] or r[2] for r in emp_rows}
+        
+        conn.close()
+
+        headers = ["item", "employee", "assigned_at", "assigned_by", "notes", "is_active"]
+        rows_to_push = [headers]
+
+        for r in local_rows:
+            row_data = [
+                item_id_to_label.get(r[1], ""),
+                emp_id_to_label.get(r[2], ""),
+                r[3] or "",
+                r[4] or "",
+                r[5] or "",
+                "Yes" if r[6] == 1 else "No"
+            ]
+            rows_to_push.append([str(x) for x in row_data])
+
+        try:
+            ws.clear()
+            try:
+                ws.update(range_name='A1', values=rows_to_push)
+            except TypeError:
+                ws.update('A1', rows_to_push)
+            print(f"[Sync] Overwrote Assignments sheet with {len(rows_to_push)-1} record(s).")
+        except Exception as e:
+            print(f"[Sync] Failed to backup assignments to sheet: {e}")
+
+    def _sync_audit_log(self, client):
+        """One-way sync: DB is master, Sheet is read-only backup."""
+        from config import SHEETS_AUDIT_NAME
+        try:
+            sh = client.open(SHEETS_AUDIT_NAME)
+        except Exception:
+            sh = client.create(SHEETS_AUDIT_NAME)
+            
+        try:
+            ws = sh.worksheet("Audit Log")
+        except Exception:
+            ws = sh.add_worksheet("Audit Log", rows=1000, cols=10)
+
+        from data.database import get_connection
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("SELECT id, action_type, entity_type, entity_id, performed_by, timestamp, before_state, after_state FROM audit_log ORDER BY timestamp DESC")
+        local_rows = c.fetchall()
+        conn.close()
+
+        headers = ["id", "action_type", "entity_type", "entity_id", "performed_by", "timestamp", "details", "before_state", "after_state"]
+        rows_to_push = [headers]
+        import json
+        for r in local_rows:
+            details = ""
+            b_state = r[6]
+            a_state = r[7]
+            try:
+                if b_state and a_state and r[1] == "update":
+                    b_dict = json.loads(b_state)
+                    a_dict = json.loads(a_state)
+                    changes = []
+                    for k, v in a_dict.items():
+                        if b_dict.get(k) != v:
+                            changes.append(f"{k}: {b_dict.get(k)} -> {v}")
+                    details = " | ".join(changes)
+                elif r[1] == "create" and a_state:
+                    a_dict = json.loads(a_state)
+                    details = f"Created with: {', '.join(f'{k}={v}' for k,v in a_dict.items() if v)}"
+                elif r[1] == "delete" and b_state:
+                    b_dict = json.loads(b_state)
+                    details = f"Deleted record: {', '.join(f'{k}={v}' for k,v in b_dict.items() if v)}"
+            except Exception:
+                pass
+
+            row = [
+                str(r[0]) if r[0] is not None else "", 
+                str(r[1]) if r[1] is not None else "", 
+                str(r[2]) if r[2] is not None else "", 
+                str(r[3]) if r[3] is not None else "", 
+                str(r[4]) if r[4] is not None else "", 
+                str(r[5]) if r[5] is not None else "", 
+                details, 
+                str(b_state) if b_state else "", 
+                str(a_state) if a_state else ""
+            ]
+            rows_to_push.append(row)
+
+        try:
+            ws.clear()
+            try:
+                ws.update(range_name='A1', values=rows_to_push)
+            except TypeError:
+                ws.update('A1', rows_to_push)
+            print(f"[Sync] Overwrote Audit Log sheet with {len(rows_to_push)-1} record(s).")
+        except Exception as e:
+            print(f"[Sync] Failed to backup audit log to sheet: {e}")
 
     def _push_pending(self, client):
         """Push all pending queue items to Google Sheets."""
@@ -329,12 +566,25 @@ class SyncManager:
             ws.update(values=rows, range_name=f"A1:{end_col}{len(rows)}")
 
     def _pull_remote(self, client):
-        """Pull new rows from Google Sheets into local SQLite (bidirectional sync)."""
+        """Pull new rows from Google Sheets into local SQLite (bidirectional sync).
+        Skips the pull entirely if the remote sheet hasn't been modified since last check.
+        """
         from config import SHEETS_CORE_NAME
         try:
             sh = client.open(SHEETS_CORE_NAME)
         except Exception:
             return  # Sheet doesn't exist yet — nothing to pull
+
+        # ── Check modifiedTime to avoid unnecessary reads ──────────────────────
+        try:
+            meta = sh.fetch_sheet_metadata()
+            modified_at = meta.get("modifiedTime", "")
+            if modified_at and modified_at == self._remote_modified_at:
+                print("[Sync] Remote sheet unchanged — skipping pull.")
+                return
+            self._remote_modified_at = modified_at
+        except Exception:
+            pass  # if metadata fetch fails, proceed with pull anyway
 
         self._pull_employees(sh)
         self._pull_items(sh)
@@ -417,18 +667,29 @@ class SyncManager:
 
         conn.close()
 
-        # Write generated UUIDs back to the sheet so future syncs can track by id
+        # Write generated UUIDs back to the sheet AND push the full row data
         if rows_to_update:
             try:
                 headers = ws.row_values(1)
-                if "id" in headers:
-                    id_col = headers.index("id") + 1  # 1-indexed
-                    for row_num, new_id in rows_to_update:
-                        ws.update_cell(row_num, id_col, new_id)
-                        
-                        # Log to audit so the sync engine pushes the fully-formatted row back to the sheet
-                        from data.repositories.audit_repo import AuditRepository
-                        AuditRepository().log("create", "employee", new_id, None, {"id": new_id}, "sync_pull")
+                id_col_idx = headers.index("id") if "id" in headers else None
+                for row_num, new_id in rows_to_update:
+                    if id_col_idx is not None:
+                        ws.update_cell(row_num, id_col_idx + 1, new_id)
+                    # Re-read the full record from local DB and push it back
+                    try:
+                        conn2 = get_connection()
+                        c2 = conn2.cursor()
+                        c2.execute("SELECT * FROM employees WHERE id=?", (new_id,))
+                        emp_row = c2.fetchone()
+                        conn2.close()
+                        if emp_row:
+                            full_data = dict(emp_row)
+                            full_data = self._transform_payload("employee", full_data)
+                            full_data["id"] = new_id
+                            values = [str(full_data.get(h, "")) for h in headers]
+                            ws.update(f"A{row_num}", [values])
+                    except Exception as e2:
+                        print(f"[Sync] Failed to push full employee row {row_num}: {e2}")
             except Exception as e:
                 print(f"[Sync] Failed to write back employee IDs to sheet: {e}")
 
@@ -531,17 +792,28 @@ class SyncManager:
 
         conn.close()
 
-        # Write generated UUIDs back to the sheet
+        # Write generated UUIDs back to the sheet AND push the full row data
         if rows_to_update:
             try:
                 headers = ws.row_values(1)
-                if "id" in headers:
-                    id_col = headers.index("id") + 1
-                    for row_num, new_id in rows_to_update:
-                        ws.update_cell(row_num, id_col, new_id)
-                        
-                        from data.repositories.audit_repo import AuditRepository
-                        AuditRepository().log("create", "item", new_id, None, {"id": new_id}, "sync_pull")
+                id_col_idx = headers.index("id") if "id" in headers else None
+                for row_num, new_id in rows_to_update:
+                    if id_col_idx is not None:
+                        ws.update_cell(row_num, id_col_idx + 1, new_id)
+                    try:
+                        conn2 = get_connection()
+                        c2 = conn2.cursor()
+                        c2.execute("SELECT * FROM items WHERE id=?", (new_id,))
+                        item_row = c2.fetchone()
+                        conn2.close()
+                        if item_row:
+                            full_data = dict(item_row)
+                            full_data = self._transform_payload("item", full_data)
+                            full_data["id"] = new_id
+                            values = [str(full_data.get(h, "")) for h in headers]
+                            ws.update(f"A{row_num}", [values])
+                    except Exception as e2:
+                        print(f"[Sync] Failed to push full item row {row_num}: {e2}")
             except Exception as e:
                 print(f"[Sync] Failed to write back item IDs to sheet: {e}")
 
@@ -645,24 +917,24 @@ class SyncManager:
 
         conn.close()
 
-        # Write generated UUIDs back to the sheet
+        # Write generated UUIDs back to the sheet (no audit log to avoid push loop)
         if rows_to_update:
             try:
                 headers = ws.row_values(1)
-                if "id" in headers:
-                    id_col = headers.index("id") + 1
-                    for row_num, new_id in rows_to_update:
-                        ws.update_cell(row_num, id_col, new_id)
-                        
-                        from data.repositories.audit_repo import AuditRepository
-                        AuditRepository().log("create", "assignment", new_id, None, {"id": new_id}, "sync_pull")
+                id_col_idx = headers.index("id") if "id" in headers else None
+                for row_num, new_id in rows_to_update:
+                    if id_col_idx is not None:
+                        ws.update_cell(row_num, id_col_idx + 1, new_id)
             except Exception as e:
                 print(f"[Sync] Failed to write back assignment IDs to sheet: {e}")
 
     def _find_remote_row(self, ws, record_id: str) -> Optional[dict]:
+        """Find a row by record_id, using per-cycle cache to avoid redundant reads."""
         try:
-            records = ws.get_all_records()
-            for r in records:
+            ws_key = ws.id
+            if ws_key not in self._sheet_cache:
+                self._sheet_cache[ws_key] = ws.get_all_records()
+            for r in self._sheet_cache[ws_key]:
                 if str(r.get("id")) == record_id:
                     return r
         except Exception:
@@ -670,17 +942,20 @@ class SyncManager:
         return None
 
     def _upsert_row(self, ws, record_id: str, data: dict):
-        """Insert or update a row in the worksheet."""
-        # Ensure 'id' is in the data payload so the spreadsheet has a primary key
+        """Insert or update a row in the worksheet, using per-cycle cache."""
         if "id" not in data:
             data["id"] = record_id
 
         try:
-            records = ws.get_all_records()
+            ws_key = ws.id
+            # Use cached records if available, else fetch and cache
+            if ws_key not in self._sheet_cache:
+                self._sheet_cache[ws_key] = ws.get_all_records()
+            records = self._sheet_cache[ws_key]
+
             headers = ws.row_values(1)
             if not headers:
                 headers = list(data.keys())
-                # Enforce 'id' as the first column
                 if "id" in headers:
                     headers.remove("id")
                     headers = ["id"] + headers
@@ -689,14 +964,18 @@ class SyncManager:
             # Find existing row
             for i, rec in enumerate(records):
                 if str(rec.get("id")) == record_id:
-                    row_num = i + 2  # 1-indexed + header
+                    row_num = i + 2
                     values = [str(data.get(h, "")) for h in headers]
                     ws.update(f"A{row_num}", [values])
+                    # Update cache to reflect the change
+                    self._sheet_cache[ws_key][i] = dict(zip(headers, values))
                     return
 
             # Insert new row
             values = [str(data.get(h, "")) for h in headers]
             ws.append_row(values)
+            # Append to cache
+            self._sheet_cache[ws_key].append(dict(zip(headers, values)))
         except Exception as e:
             print(f"[Sync] Upsert error: {e}")
 
@@ -710,8 +989,7 @@ class SyncManager:
 
     def force_sync(self):
         """Trigger an immediate sync cycle (call from UI or after any save)."""
-        self._wake_event.set()  # interrupt the sleep early
-        threading.Thread(target=self._sync_cycle, daemon=True).start()
+        self._wake_event.set()  # interrupt the sleep early, the main thread will run it
 
 
 class ConflictError(Exception):

@@ -8,7 +8,11 @@ import traceback
 import threading
 import platform
 import requests
+import json
 from datetime import datetime
+from config import DATA_DIR
+
+LOCAL_LOG_FILE = os.path.join(DATA_DIR, "system_errors.log")
 
 _WEBHOOK_URL = ""
 APP_VERSION  = "unknown"
@@ -59,6 +63,17 @@ def report_exception(exc_type, exc_value, exc_tb):
         f"**Location:** `{location}`\n\n"
         f"```python\n{tb_text[-2000:]}\n```"
     )
+    
+    # ── Local File Logging ──
+    try:
+        os.makedirs(os.path.dirname(LOCAL_LOG_FILE), exist_ok=True)
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        log_entry = f"[{timestamp}] {exc_type.__name__}: {str(exc_value)}\nLocation: {location}\n{tb_text}\n" + ("-"*60) + "\n"
+        with open(LOCAL_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(log_entry)
+    except Exception as log_e:
+        print(f"[ErrorReporter] Failed to write local log: {log_e}")
+
     threading.Thread(
         target=_send_to_discord,
         args=(title, description),
@@ -68,6 +83,15 @@ def report_exception(exc_type, exc_value, exc_tb):
 
 def report_message(title: str, message: str, color: int = 0xF59E0B):
     """Send a plain informational or warning message to Discord."""
+    # ── Local File Logging ──
+    try:
+        os.makedirs(os.path.dirname(LOCAL_LOG_FILE), exist_ok=True)
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        with open(LOCAL_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(f"[{timestamp}] INFO: {title}\n{message}\n" + ("-"*60) + "\n")
+    except Exception as log_e:
+        print(f"[ErrorReporter] Failed to write local log: {log_e}")
+
     threading.Thread(
         target=_send_to_discord,
         args=(title, message, color),
@@ -93,15 +117,18 @@ def install_global_handler():
     # Also patch Tkinter's internal exception handler
     try:
         import tkinter
-        original_report = getattr(tkinter.Misc, 'report_callback_exception', None)
-
+        import customtkinter
+        
+        original_tk_report = getattr(tkinter.Tk, 'report_callback_exception', None)
         def _tk_handler(self, exc_type, exc_value, exc_tb):
-            if original_report:
-                original_report(self, exc_type, exc_value, exc_tb)
+            if original_tk_report:
+                original_tk_report(self, exc_type, exc_value, exc_tb)
             report_exception(exc_type, exc_value, exc_tb)
-
-        tkinter.Misc.report_callback_exception = _tk_handler
+            
+        tkinter.Tk.report_callback_exception = _tk_handler
+        customtkinter.CTk.report_callback_exception = _tk_handler
     except Exception:
+        pass
         pass
 
     print("[ErrorReporter] Global exception handler installed.")

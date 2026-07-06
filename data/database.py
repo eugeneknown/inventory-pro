@@ -77,7 +77,8 @@ def init_db():
     c.execute("""
         CREATE TABLE IF NOT EXISTS items (
             id              TEXT PRIMARY KEY,
-            serial_number   TEXT NOT NULL UNIQUE,
+            item_id         TEXT UNIQUE,
+            serial_number   TEXT,
             serial_source   TEXT NOT NULL DEFAULT 'manual',
             name            TEXT NOT NULL,
             brand           TEXT,
@@ -187,8 +188,21 @@ def init_db():
 
     conn.commit()
     _seed_defaults(conn)
+    _migrate_item_id(conn)
     conn.close()
     print(f"[DB] Database initialized at: {DB_PATH}")
+
+
+def _migrate_item_id(conn: sqlite3.Connection):
+    """Add item_id column to items table if it doesn't exist."""
+    c = conn.cursor()
+    c.execute("PRAGMA table_info(items)")
+    columns = [row[1] for row in c.fetchall()]
+    if "item_id" not in columns:
+        c.execute("ALTER TABLE items ADD COLUMN item_id TEXT")
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_items_item_id ON items(item_id)")
+        conn.commit()
+        print("[DB] Migrated items table: added item_id column.")
 
 
 def _seed_defaults(conn: sqlite3.Connection):

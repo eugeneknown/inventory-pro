@@ -1,21 +1,33 @@
 import json
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from data.database import get_connection
+
 
 def get_gemini_api_key() -> str:
     conn = get_connection()
     c = conn.cursor()
     c.execute("SELECT value FROM app_settings WHERE key = 'gemini_api_key'")
     row = c.fetchone()
-    conn.close()
     return row[0] if row else ""
+
+def get_gemini_model() -> str:
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT value FROM app_settings WHERE key = 'gemini_model'")
+    row = c.fetchone()
+    conn.close()
+    return row[0] if (row and row[0]) else "gemini-2.5-flash"
 
 def save_gemini_api_key(api_key: str):
     conn = get_connection()
-    c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('gemini_api_key', ?)", (api_key,))
+    conn.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('gemini_api_key', ?)",
+        (api_key,)
+    )
     conn.commit()
     conn.close()
+
 
 def fetch_item_info(brand: str, model: str) -> dict:
     """
@@ -24,13 +36,11 @@ def fetch_item_info(brand: str, model: str) -> dict:
     """
     api_key = get_gemini_api_key()
     if not api_key:
-        raise ValueError("No Gemini API key configured. Please add it in Settings.")
-    
-    genai.configure(api_key=api_key)
-    
-    # We use gemini-flash-latest since it's very fast, cheap/free, and good at data extraction
-    model_instance = genai.GenerativeModel("gemini-flash-latest")
-    
+        raise ValueError("No Gemini API key configured. Please add it in Settings → Integrations.")
+
+    model_name = get_gemini_model()
+    client = genai.Client(api_key=api_key)
+
     prompt = f"""
     I need the technical specifications and general info for the following device:
     Brand: {brand}
@@ -52,21 +62,47 @@ def fetch_item_info(brand: str, model: str) -> dict:
     
     If you are completely unsure about a specific field, use null instead of guessing wildly.
     """
-    
-    response = model_instance.generate_content(prompt)
-    
-    # Clean up the response to parse JSON
+
+    response = client.models.generate_content(
+        model=model_name,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+        ),
+    )
+
     text = response.text.strip()
+    # Strip any accidental markdown fences
     if text.startswith("```json"):
         text = text[7:]
     if text.startswith("```"):
         text = text[3:]
     if text.endswith("```"):
         text = text[:-3]
-        
+
     try:
-        data = json.loads(text.strip())
-        return data
-    except json.JSONDecodeError as e:
+        return json.loads(text.strip())
+    except json.JSONDecodeError:
         print(f"[AI Autofill] Failed to parse JSON: {text}")
         raise ValueError("Failed to parse specifications from AI.")
+
+def test_gemini_model() -> tuple[bool, str]:
+    """Test if the configured Gemini model is valid and accessible."""
+    api_key = get_gemini_api_key()
+    if not api_key:
+        return True, "" # Don't error if they haven't set it up yet
+        
+    model_name = get_gemini_model()
+    client = genai.Client(api_key=api_key)
+    try:
+        # Minimal request to test model validity
+        client.models.generate_content(
+            model=model_name,
+            contents="hello",
+        )
+        return True, ""
+    except Exception as e:
+        msg = str(e).lower()
+        if "404" in msg or "not found" in msg:
+            return False, f"The Gemini model '{model_name}' is not found or has been retired."
+        return False, f"Gemini API Error: {str(e)}"

@@ -42,11 +42,12 @@ _cfg_reporter(
 install_global_handler()
 
 # ── Configure auto-updater ───────────────────────────────────────────────────
-from updater.core import set_config as _cfg_updater
+from updater.core import set_config as _cfg_updater, cleanup_old_exe
 _cfg_updater(
     github_repo=_load_setting("github_repo"),
     github_token=_load_setting("github_token"),
 )
+cleanup_old_exe()
 
 # Apply theme
 from utils.theme import apply_theme
@@ -130,6 +131,23 @@ def main():
             banner.grid(row=0, column=0, columnspan=2, sticky="ew")
 
         check_async(_on_update_check)
+
+        # ── Test Gemini Model ────────────────────────────────────────────────
+        from utils.ai_autofill import test_gemini_model
+        from ui.components import Toast
+        import threading
+        
+        def _verify_gemini():
+            is_valid, err_msg = test_gemini_model()
+            if not is_valid:
+                app.after(1000, lambda: Toast.show(
+                    app, 
+                    f"AI Warning: {err_msg}\nPlease update your model in Settings.", 
+                    kind="warning", 
+                    duration=10000
+                ))
+                
+        threading.Thread(target=_verify_gemini, daemon=True).start()
 
         def on_close():
             # Save the current window geometry

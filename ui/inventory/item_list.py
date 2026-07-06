@@ -9,6 +9,7 @@ from data.repositories.item_repo import ItemRepository
 from data.repositories.audit_repo import AuditRepository
 from ui.components import (SectionHeader, SearchBar, FilterDropdown,
                             DataTable, ConfirmDialog, Toast, EmptyState)
+import threading
 
 
 class ItemListPage(ctk.CTkFrame):
@@ -21,6 +22,7 @@ class ItemListPage(ctk.CTkFrame):
         self._search_query = ""
         self._cat_filter = "All"
         self._status_filter = "All"
+        self._fetch_id = 0
         self._build()
         self._load()
 
@@ -117,27 +119,52 @@ class ItemListPage(ctk.CTkFrame):
         self._table_container.pack(fill="both", expand=True)
 
     def _load(self):
+        self._fetch_id += 1
+        current_fetch = self._fetch_id
+
         for w in self._table_container.winfo_children():
             w.destroy()
 
-        cat_id = None
-        if self._cat_filter != "All":
-            cats = self._repo.get_categories()
-            cat_id = next((c["id"] for c in cats if c["name"] == self._cat_filter), None)
+        ctk.CTkLabel(
+            self._table_container,
+            text="Loading...",
+            font=get_font(14),
+            text_color=COLORS["text_secondary"]
+        ).pack(expand=True)
 
-        status_id = None
-        if self._status_filter != "All":
-            statuses = self._repo.get_statuses()
-            status_id = next(
-                (s["id"] for s in statuses
-                 if s["name"].replace("_", " ").title() == self._status_filter), None
+        cat_filter = self._cat_filter
+        status_filter = self._status_filter
+        search_query = self._search_query
+
+        def fetch():
+            cat_id = None
+            if cat_filter != "All":
+                cats = self._repo.get_categories()
+                cat_id = next((c["id"] for c in cats if c["name"] == cat_filter), None)
+
+            status_id = None
+            if status_filter != "All":
+                statuses = self._repo.get_statuses()
+                status_id = next(
+                    (s["id"] for s in statuses
+                     if s["name"].replace("_", " ").title() == status_filter), None
+                )
+
+            items = self._repo.get_all(
+                category_id=cat_id,
+                status_id=status_id,
+                search=search_query or None
             )
+            self.after(0, lambda: self._render(items, current_fetch))
 
-        items = self._repo.get_all(
-            category_id=cat_id,
-            status_id=status_id,
-            search=self._search_query or None
-        )
+        threading.Thread(target=fetch, daemon=True).start()
+
+    def _render(self, items, fetch_id=None):
+        if fetch_id is not None and fetch_id != self._fetch_id:
+            return
+
+        for w in self._table_container.winfo_children():
+            w.destroy()
 
         if not items:
             EmptyState(
@@ -149,7 +176,8 @@ class ItemListPage(ctk.CTkFrame):
             return
 
         columns = [
-            ("serial_number",  "Serial Number", 150),
+            ("item_id",        "Item ID",       110),
+            ("serial_number",  "Serial Number", 140),
             ("name",           "Name",          180),
             ("brand",          "Brand",         100),
             ("category_name",  "Category",      120),
@@ -159,7 +187,8 @@ class ItemListPage(ctk.CTkFrame):
 
         rows = [
             {
-                "serial_number":  i.serial_number,
+                "item_id":        i.item_id,
+                "serial_number":  i.serial_number or "—",
                 "name":           i.name,
                 "brand":          i.brand or "—",
                 "category_name":  i.category_name or "—",
@@ -283,6 +312,10 @@ class ItemListPage(ctk.CTkFrame):
                 print("[Import] Errors:\n" + "\n".join(result["errors"]))
             self._load()
 
-    def _on_search(self, q): self._search_query = q; self._load()
+    def _on_search(self, q): 
+        print(f"[DEBUG] Search triggered with query: '{q}'")
+        self._search_query = q
+        self._load()
+
     def _on_cat_filter(self, v): self._cat_filter = v; self._load()
     def _on_status_filter(self, v): self._status_filter = v; self._load()

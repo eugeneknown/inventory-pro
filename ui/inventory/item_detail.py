@@ -168,6 +168,38 @@ class ItemDetailDialog(ctk.CTkToplevel):
                 anchor="w", wraplength=440
             ).pack(side="left", padx=(0, 14))
 
+        # ── Computer Specs ──
+        from data.repositories.computer_specs_repo import ComputerSpecsRepository
+        specs = ComputerSpecsRepository().get_by_item(self._item.id)
+        if specs:
+            ctk.CTkLabel(
+                frame, text="Computer Specifications",
+                font=get_font(12, "bold"), text_color=COLORS["primary"]
+            ).pack(anchor="w", padx=4, pady=(20, 8))
+
+            spec_fields = [
+                ("CPU", specs.cpu or "—"),
+                ("Cores / Speed", f"{specs.cpu_cores or '?'} cores @ {specs.cpu_ghz or '?'} GHz"),
+                ("RAM", f"{specs.ram_gb} GB" if specs.ram_gb else "—"),
+                ("Storage", f"{specs.storage_gb or '?'} GB ({specs.storage_type or '?'})"),
+                ("GPU", specs.gpu or "—"),
+                ("Year", specs.purchase_year or "—"),
+            ]
+            
+            for label, value in spec_fields:
+                row = ctk.CTkFrame(frame, fg_color=COLORS["bg_input"], corner_radius=8)
+                row.pack(fill="x", pady=2)
+                ctk.CTkLabel(
+                    row, text=label,
+                    font=get_font(11), text_color=COLORS["text_muted"],
+                    width=140, anchor="w"
+                ).pack(side="left", padx=14, pady=8)
+                ctk.CTkLabel(
+                    row, text=str(value),
+                    font=get_font(12), text_color=COLORS["secondary"],
+                    anchor="w", wraplength=440
+                ).pack(side="left", padx=(0, 14))
+
     def _build_assignment_tab(self, parent):
         frame = ctk.CTkFrame(parent, fg_color="transparent")
         frame.pack(fill="both", expand=True, padx=16, pady=12)
@@ -304,15 +336,28 @@ class ItemDetailDialog(ctk.CTkToplevel):
 
         status_map = {s["name"].replace("_", " ").title(): s["id"] for s in statuses}
         self._new_status_var = ctk.StringVar(value=current_name.replace("_", " ").title())
+        status_display_names = list(status_map.keys())
 
-        ctk.CTkOptionMenu(
+        from ui.components.ctk_scrollable_dropdown import CTkScrollableDropdown
+        self._status_combo = ctk.CTkComboBox(
             frame,
-            values=list(status_map.keys()),
+            values=status_display_names,
             variable=self._new_status_var,
-            fg_color=COLORS["bg_input"], button_color=COLORS["border"],
+            fg_color=COLORS["bg_input"], border_color=COLORS["border"],
+            button_color=COLORS["border"], button_hover_color=COLORS["bg_hover"],
             text_color=COLORS["text_primary"], font=get_font(13),
-            corner_radius=8, height=42
-        ).pack(fill="x", pady=(0, 16))
+            corner_radius=8, height=42, state="readonly"
+        )
+        self._status_combo.pack(fill="x", pady=(0, 16))
+        CTkScrollableDropdown(
+            self._status_combo, values=status_display_names,
+            command=lambda v: (self._new_status_var.set(v), self._status_combo.set(v)),
+            autocomplete=False, justify="left", height=200,
+            fg_color=COLORS["bg_card"], button_color=COLORS["bg_surface"],
+            hover_color=COLORS["bg_hover"], text_color=COLORS["text_primary"],
+            frame_border_color=COLORS["border"], scrollbar_button_color=COLORS["border"],
+            font=get_font(13),
+        )
 
         # Notes
         ctk.CTkLabel(frame, text="Reason / Notes (optional)", font=get_font(11),

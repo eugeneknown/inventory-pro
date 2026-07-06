@@ -33,6 +33,7 @@ class AssignmentRepository:
         c = conn.cursor()
         query = """
             SELECT a.*, i.name as item_name, i.serial_number as item_serial,
+                   i.item_id as item_item_id,
                    e.full_name as employee_name, d.name as employee_dept
             FROM assignments a
             JOIN items i ON a.item_id = i.id
@@ -50,11 +51,13 @@ class AssignmentRepository:
         return [self._row_to_model(r) for r in rows]
 
     def get_all(self, active_only: bool = False,
-                employee_id: Optional[str] = None) -> list[Assignment]:
+                employee_id: Optional[str] = None,
+                search: Optional[str] = None) -> list[Assignment]:
         conn = get_connection()
         c = conn.cursor()
         query = """
             SELECT a.*, i.name as item_name, i.serial_number as item_serial,
+                   i.item_id as item_item_id,
                    e.full_name as employee_name, d.name as employee_dept
             FROM assignments a
             JOIN items i ON a.item_id = i.id
@@ -68,6 +71,10 @@ class AssignmentRepository:
         if employee_id:
             query += " AND a.employee_id = ?"
             params.append(employee_id)
+        if search:
+            query += " AND (i.name LIKE ? OR i.serial_number LIKE ? OR e.full_name LIKE ?)"
+            s = f"%{search}%"
+            params.extend([s, s, s])
         query += " ORDER BY a.assigned_at DESC"
         c.execute(query, params)
         rows = c.fetchall()
@@ -150,6 +157,7 @@ class AssignmentRepository:
             sync_status=d.get("sync_status", "pending"),
             item_name=d.get("item_name"),
             item_serial=d.get("item_serial"),
+            item_item_id=d.get("item_item_id"),
             employee_name=d.get("employee_name"),
             employee_dept=d.get("employee_dept"),
         )

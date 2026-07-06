@@ -11,6 +11,7 @@ from ui.components import (SearchBar, FilterDropdown,
 from config import MACHINE_ID
 import json
 import os
+import threading
 
 
 class EmployeeListPage(ctk.CTkFrame):
@@ -23,6 +24,7 @@ class EmployeeListPage(ctk.CTkFrame):
         self._search_query = ""
         self._dept_filter = "All"
         self._status_filter = "All"
+        self._fetch_id = 0
         self._build()
         self._load()
 
@@ -90,20 +92,47 @@ class EmployeeListPage(ctk.CTkFrame):
         self._table_container.pack(fill="both", expand=True)
 
     def _load(self):
+        # Clear and show a loading indicator immediately
+        self._fetch_id += 1
+        current_fetch = self._fetch_id
+
         for w in self._table_container.winfo_children():
             w.destroy()
 
-        dept_id = None
-        if self._dept_filter != "All":
-            depts = self._repo.get_departments()
-            dept_id = next((d["id"] for d in depts if d["name"] == self._dept_filter), None)
-
-        status = None if self._status_filter == "All" else self._status_filter.lower()
-        employees = self._repo.get_all(
-            department_id=dept_id,
-            status=status,
-            search=self._search_query or None
+        loading_label = ctk.CTkLabel(
+            self._table_container,
+            text="Loading...",
+            font=get_font(14),
+            text_color=COLORS["text_secondary"]
         )
+        loading_label.pack(expand=True)
+
+        dept_filter = self._dept_filter
+        status_filter = self._status_filter
+        search_query = self._search_query
+
+        def fetch():
+            dept_id = None
+            if dept_filter != "All":
+                depts = self._repo.get_departments()
+                dept_id = next((d["id"] for d in depts if d["name"] == dept_filter), None)
+
+            status = None if status_filter == "All" else status_filter.lower()
+            employees = self._repo.get_all(
+                department_id=dept_id,
+                status=status,
+                search=search_query or None
+            )
+            self.after(0, lambda: self._render(employees, current_fetch))
+
+        threading.Thread(target=fetch, daemon=True).start()
+
+    def _render(self, employees, fetch_id=None):
+        if fetch_id is not None and fetch_id != self._fetch_id:
+            return
+
+        for w in self._table_container.winfo_children():
+            w.destroy()
 
         if not employees:
             EmptyState(

@@ -298,7 +298,7 @@ class EmployeeDetailDialog(ctk.CTkToplevel):
                 # Pre-select this employee
                 for key, eid in self_._emp_map.items():
                     if eid == emp_id:
-                        self_._emp_var.set(key)
+                        self_._emp_combo.set(key)
                         break
 
         QuickAssignDialog(self, self._user, self._employee.id,

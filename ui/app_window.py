@@ -76,8 +76,9 @@ class AppWindow(ctk.CTk):
             font=ctk.CTkFont(family="Fira Code", size=18, weight="bold"),
             text_color=COLORS["primary"]
         ).pack(anchor="w")
+        import config
         ctk.CTkLabel(
-            logo_frame, text="PRO  v1.0",
+            logo_frame, text=f"PRO  v{config.APP_VERSION}",
             font=ctk.CTkFont(family="Fira Code", size=10),
             text_color=COLORS["text_muted"]
         ).pack(anchor="w")
@@ -233,9 +234,12 @@ class AppWindow(ctk.CTk):
         dot_char, dot_color, label_text = state_map.get(
             state, ("●", COLORS["text_muted"], str(state))
         )
-        # Update from main thread
-        self.after(0, lambda: self._sync_dot.configure(text=dot_char, text_color=dot_color))
-        self.after(0, lambda: self._sync_label.configure(text=label_text))
+        # Update from main thread — guard against window being destroyed on exit
+        try:
+            self.after(0, lambda: self._sync_dot.configure(text=dot_char, text_color=dot_color))
+            self.after(0, lambda: self._sync_label.configure(text=label_text))
+        except RuntimeError:
+            pass
 
     def _logout(self):
         from ui.login import LoginScreen

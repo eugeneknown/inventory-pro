@@ -13,6 +13,21 @@ from data.models import Item
 
 class ItemRepository:
 
+    def next_item_id(self) -> str:
+        """Generate the next available ITM-XXX string."""
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("SELECT item_id FROM items WHERE item_id LIKE 'ITM-%' ORDER BY CAST(SUBSTR(item_id, 5) AS INTEGER) DESC LIMIT 1")
+        row = c.fetchone()
+        conn.close()
+        if not row:
+            return "ITM-001"
+        try:
+            last_num = int(row[0].split("-")[1])
+            return f"ITM-{last_num + 1:03d}"
+        except Exception:
+            return "ITM-001"
+
     def get_all(self, category_id: Optional[str] = None,
                 status_id: Optional[str] = None,
                 search: Optional[str] = None,
@@ -92,13 +107,14 @@ class ItemRepository:
         now = datetime.utcnow().isoformat()
         c.execute("""
             INSERT INTO items
-                (id, serial_number, serial_source, name, brand, model,
+                (id, item_id, serial_number, serial_source, name, brand, model,
                  category_id, description, purchase_date, purchase_price,
                  status_id, image_path, notes, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             item_id,
-            data["serial_number"],
+            data.get("item_id") or self.next_item_id(),
+            data.get("serial_number"),
             data.get("serial_source", "manual"),
             data["name"],
             data.get("brand"),
@@ -115,6 +131,70 @@ class ItemRepository:
         conn.commit()
         conn.close()
         return self.get_by_id(item_id)
+
+    def create_many(self, data_list: list[dict]) -> list[Item]:
+        if not data_list: return []
+        conn = get_connection()
+        c = conn.cursor()
+        now = datetime.utcnow().isoformat()
+        
+        # Pre-fetch the next ID so we can increment it in memory
+        current_next_id = self.next_item_id()
+        if current_next_id.startswith("ITM-"):
+            try:
+                next_num = int(current_next_id.split("-")[1])
+            except:
+                next_num = 1
+        else:
+            next_num = 1
+        
+        insert_records = []
+        created_items = []
+        for data in data_list:
+            item_id = str(uuid.uuid4())
+            
+            assigned_item_id = data.get("item_id")
+            if not assigned_item_id:
+                assigned_item_id = f"ITM-{next_num:03d}"
+                next_num += 1
+                
+            insert_records.append((
+                item_id,
+                assigned_item_id,
+                data.get("serial_number"),
+                data.get("serial_source", "manual"),
+                data["name"],
+                data.get("brand"),
+                data.get("model"),
+                data.get("category_id"),
+                data.get("description"),
+                data.get("purchase_date"),
+                data.get("purchase_price"),
+                data.get("status_id") or self._get_default_status_id(conn),
+                data.get("image_path"),
+                data.get("notes"),
+                now, now
+            ))
+            created_items.append(Item(
+                id=item_id, item_id=assigned_item_id, name=data["name"],
+                serial_number=data.get("serial_number"), serial_source=data.get("serial_source", "manual"),
+                brand=data.get("brand"), model=data.get("model"), category_id=data.get("category_id"),
+                description=data.get("description"), purchase_date=data.get("purchase_date"),
+                purchase_price=data.get("purchase_price"), status_id=data.get("status_id"),
+                image_path=data.get("image_path"), notes=data.get("notes"),
+                created_at=now, updated_at=now
+            ))
+
+        c.executemany("""
+            INSERT INTO items
+                (id, item_id, serial_number, serial_source, name, brand, model,
+                 category_id, description, purchase_date, purchase_price,
+                 status_id, image_path, notes, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, insert_records)
+        conn.commit()
+        conn.close()
+        return created_items
 
     def update(self, item_id: str, data: dict) -> Optional[Item]:
         conn = get_connection()
@@ -192,9 +272,10 @@ class ItemRepository:
         d = dict(row)
         return Item(
             id=d["id"],
-            serial_number=d["serial_number"],
-            serial_source=d.get("serial_source", "manual"),
             name=d["name"],
+            item_id=d.get("item_id", ""),
+            serial_number=d.get("serial_number"),
+            serial_source=d.get("serial_source", "manual"),
             brand=d.get("brand"),
             model=d.get("model"),
             category_id=d.get("category_id"),
