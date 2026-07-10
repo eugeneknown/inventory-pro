@@ -125,11 +125,13 @@ class ItemDetailDialog(ctk.CTkToplevel):
         tabs.pack(fill="both", expand=True)
         tabs.add("Details")
         tabs.add("Assignment")
+        tabs.add("Repair")
         tabs.add("History")
         tabs.add("Change Status")
 
         self._build_details_tab(tabs.tab("Details"))
         self._build_assignment_tab(tabs.tab("Assignment"))
+        self._build_repair_tab(tabs.tab("Repair"))
         self._build_history_tab(tabs.tab("History"))
         self._build_status_tab(tabs.tab("Change Status"))
 
@@ -169,8 +171,8 @@ class ItemDetailDialog(ctk.CTkToplevel):
             ).pack(side="left", padx=(0, 14))
 
         # ── Computer Specs ──
-        from data.repositories.computer_specs_repo import ComputerSpecsRepository
-        specs = ComputerSpecsRepository().get_by_item(self._item.id)
+        from data.repositories.specs_repo import SpecsRepository
+        specs = SpecsRepository().get_by_item(self._item.id)
         if specs:
             ctk.CTkLabel(
                 frame, text="Computer Specifications",
@@ -243,14 +245,28 @@ class ItemDetailDialog(ctk.CTkToplevel):
                               message=f"Mark this item as returned from {active.employee_name}?",
                               on_confirm=do)
 
-            ctk.CTkButton(
-                frame, text="↩  Return Item",
-                font=get_font(12, "bold"),
-                fg_color=COLORS["warning_dim"], hover_color=COLORS["warning"],
-                text_color=COLORS["warning"],
-                corner_radius=8, height=38,
-                command=return_item
-            ).pack(anchor="w")
+            if self._item.status_name == "under_repair":
+                ctk.CTkLabel(
+                    frame, text="Use the Repair tab to return this item.",
+                    font=get_font(11, "bold"), text_color=COLORS["warning"]
+                ).pack(anchor="w", pady=(0, 4))
+                
+                ctk.CTkButton(
+                    frame, text="↩  Return Item",
+                    font=get_font(12, "bold"),
+                    fg_color=COLORS["bg_input"], text_color=COLORS["text_muted"],
+                    hover=False, state="disabled",
+                    corner_radius=8, height=38
+                ).pack(anchor="w")
+            else:
+                ctk.CTkButton(
+                    frame, text="↩  Return Item",
+                    font=get_font(12, "bold"),
+                    fg_color=COLORS["warning_dim"], hover_color=COLORS["warning"],
+                    text_color=COLORS["warning"],
+                    corner_radius=8, height=38,
+                    command=return_item
+                ).pack(anchor="w")
 
         else:
             ctk.CTkLabel(
@@ -270,40 +286,86 @@ class ItemDetailDialog(ctk.CTkToplevel):
         frame = ctk.CTkFrame(parent, fg_color="transparent")
         frame.pack(fill="both", expand=True, padx=16, pady=12)
 
-        all_assignments = self._assign_repo.get_all(active_only=False,
-                                                     employee_id=None)
-        item_history = [a for a in all_assignments if a.item_id == self._item.id]
+        # 1. Fetch item-specific audit logs
+        entries = self._audit.get_all(entity_type="item", entity_id=self._item.id, limit=50)
 
-        if not item_history:
-            ctk.CTkLabel(frame, text="No assignment history for this item.",
+        # 2. Fetch assignment-specific audit logs for this item
+        all_assignments = self._assign_repo.get_all(active_only=False, employee_id=None)
+        
+        assign_to_emp = {}
+        for a in all_assignments:
+            if a.item_id == self._item.id:
+                assign_to_emp[a.id] = a.employee_name
+
+        for aid in assign_to_emp.keys():
+            assign_entries = self._audit.get_all(entity_type="assignment", entity_id=aid)
+            entries.extend(assign_entries)
+
+        # 3. Sort by timestamp descending
+        entries.sort(key=lambda e: e.timestamp or "", reverse=True)
+
+        if not entries:
+            ctk.CTkLabel(frame, text="No activity recorded for this item.",
                          font=get_font(13), text_color=COLORS["text_muted"]).pack(pady=40)
             return
 
         scroll = ctk.CTkScrollableFrame(frame, fg_color="transparent")
         scroll.pack(fill="both", expand=True)
 
-        for a in item_history:
-            card = ctk.CTkFrame(scroll, fg_color=COLORS["bg_surface"], corner_radius=8)
-            card.pack(fill="x", pady=3)
+        action_colors = {
+            "create": COLORS["success"], "update": COLORS["primary"],
+            "delete": COLORS["danger"],  "assign": COLORS["info"],
+            "return": COLORS["warning"], "status_change": COLORS["secondary"],
+        }
+        for entry in entries:
+            row = ctk.CTkFrame(scroll, fg_color=COLORS["bg_surface"], corner_radius=8)
+            row.pack(fill="x", pady=4)
 
-            dot_color = COLORS["primary"] if a.is_active else COLORS["text_muted"]
-            ctk.CTkFrame(card, fg_color=dot_color, width=3,
-                         corner_radius=0).pack(side="left", fill="y")
+            color = action_colors.get(entry.action_type, COLORS["text_muted"])
+            
+            top_row = ctk.CTkFrame(row, fg_color="transparent")
+            top_row.pack(fill="x", padx=12, pady=(10, 4))
+            
+            ctk.CTkLabel(top_row, text="●", font=get_font(10),
+                         text_color=color).pack(side="left", padx=(0, 8))
+            ctk.CTkLabel(
+                top_row, text=entry.action_type.replace("_", " ").upper(),
+                font=get_font(11, "bold"), text_color=color, width=110, anchor="w"
+            ).pack(side="left")
+            
+            ts = (entry.timestamp or "")[:16].replace("T", " ")
+            ctk.CTkLabel(top_row, text=ts, font=get_font(10),
+                         text_color=COLORS["text_muted"]).pack(side="right")
+            ctk.CTkLabel(
+                top_row, text=f"By: {entry.performed_by}",
+                font=get_font(10), text_color=COLORS["text_secondary"]
+            ).pack(side="right", padx=16)
 
-            inner = ctk.CTkFrame(card, fg_color="transparent")
-            inner.pack(side="left", fill="both", expand=True, padx=12, pady=10)
-
-            ctk.CTkLabel(inner, text=a.employee_name or "—",
-                         font=get_font(12, "bold"),
-                         text_color=COLORS["text_primary"]).pack(anchor="w")
-            period = f"{(a.assigned_at or '')[:10]} → {(a.returned_at or 'Present')[:10]}"
-            ctk.CTkLabel(inner, text=f"{period}  •  By: {a.assigned_by}",
-                         font=get_font(10),
-                         text_color=COLORS["text_muted"]).pack(anchor="w")
-
-            if a.is_active:
-                ctk.CTkLabel(card, text="ACTIVE", font=get_font(9, "bold"),
-                             text_color=COLORS["primary"]).pack(side="right", padx=14)
+            # Details row (like status change notes)
+            import json
+            details = ""
+            if entry.action_type == "status_change" and entry.after_state:
+                try:
+                    after_dict = json.loads(entry.after_state) if isinstance(entry.after_state, str) else entry.after_state
+                    status_name = after_dict.get("status", "Unknown")
+                    notes = after_dict.get("notes", "")
+                    details = f"Status changed to: {status_name.title()}"
+                    if notes:
+                        details += f"\nNotes: {notes}"
+                except:
+                    pass
+            elif entry.action_type == "assign":
+                emp_name = assign_to_emp.get(entry.entity_id, "an employee")
+                details = f"Item assigned to {emp_name}"
+            elif entry.action_type == "return":
+                emp_name = assign_to_emp.get(entry.entity_id, "an employee")
+                details = f"Item returned from {emp_name}"
+            
+            if details:
+                ctk.CTkLabel(
+                    row, text=details, font=get_font(11),
+                    text_color=COLORS["text_secondary"], justify="left", anchor="w"
+                ).pack(fill="x", padx=36, pady=(0, 10))
 
     def _build_status_tab(self, parent):
         """Let the user change the item status directly from the detail view."""
@@ -335,7 +397,18 @@ class ItemDetailDialog(ctk.CTkToplevel):
                      text_color=COLORS["text_secondary"]).pack(anchor="w", pady=(0, 8))
 
         status_map = {s["name"].replace("_", " ").title(): s["id"] for s in statuses}
-        self._new_status_var = ctk.StringVar(value=current_name.replace("_", " ").title())
+        
+        # Remove statuses managed by other tabs
+        for rm in ["Assigned", "Under Repair"]:
+            if rm in status_map:
+                del status_map[rm]
+                
+        # If current status is removed, add a placeholder or select the first available
+        display_current = current_name.replace("_", " ").title()
+        if display_current not in status_map:
+            display_current = list(status_map.keys())[0] if status_map else "Available"
+            
+        self._new_status_var = ctk.StringVar(value=display_current)
         status_display_names = list(status_map.keys())
 
         from ui.components.ctk_scrollable_dropdown import CTkScrollableDropdown
@@ -374,14 +447,21 @@ class ItemDetailDialog(ctk.CTkToplevel):
             new_id = status_map.get(new_name_display)
             if not new_id:
                 return
-            before = {"status_id": self._item.status_id, "status": current_name}
-            self._item_repo.update_status(self._item.id, new_id)
+            
+            notes = self._status_notes.get("1.0", "end").strip()
+            before = {"status_id": self._item.status_id, "status": current_name, "notes": self._item.notes}
+            
+            # Update status and overwrite item notes if notes are provided
+            self._item_repo.update_status(self._item.id, new_id, notes=notes if notes else None)
+            if notes:
+                self._item.notes = notes
+                
             self._audit.log(
                 "status_change", "item", self._item.id,
                 before=before,
                 after={"status_id": new_id,
                        "status": new_name_display.lower().replace(" ", "_"),
-                       "notes": self._status_notes.get("1.0", "end").strip()},
+                       "notes": notes},
                 performed_by=self._user.get("display_name", "admin")
             )
             Toast.show(self, f"Status changed to '{new_name_display}'.", "success")
@@ -401,6 +481,149 @@ class ItemDetailDialog(ctk.CTkToplevel):
         from ui.assignments.assignment_panel import AssignDialog
         AssignDialog(self, user=self._user,
                      on_save=lambda: (self._refresh(), self._on_change and self._on_change()))
+
+    def _build_repair_tab(self, parent):
+        frame = ctk.CTkScrollableFrame(parent, fg_color="transparent")
+        frame.pack(fill="both", expand=True, padx=16, pady=16)
+
+        ctk.CTkLabel(
+            frame, text="Send to Repair",
+            font=get_font(15, "bold"), text_color=COLORS["text_primary"]
+        ).pack(anchor="w", pady=(0, 4))
+        ctk.CTkLabel(
+            frame,
+            text="Temporarily assign this item to a technician or employee for repair.",
+            font=get_font(11), text_color=COLORS["text_secondary"], wraplength=400
+        ).pack(anchor="w", pady=(0, 16))
+
+        if self._item.status_name == "under_repair":
+            card = ctk.CTkFrame(frame, fg_color=COLORS["warning_dim"], corner_radius=12)
+            card.pack(fill="x", pady=(0, 16))
+            ctk.CTkLabel(
+                card, text="Item is currently Under Repair",
+                font=get_font(12, "bold"), text_color=COLORS["warning"]
+            ).pack(anchor="w", padx=16, pady=14)
+            
+            def return_from_repair():
+                from data.database import get_connection
+                conn = get_connection()
+                c = conn.cursor()
+                
+                # Find the previous assignee (before this repair assignment)
+                c.execute("""
+                    SELECT employee_id FROM assignments 
+                    WHERE item_id=? AND is_active=0 
+                    ORDER BY assigned_at DESC LIMIT 1
+                """, (self._item.id,))
+                prev_assign = c.fetchone()
+                conn.close()
+                
+                # 1. Return from repair (deactivates current repair assignment)
+                self._assign_repo.return_item(self._item.id, notes="Returned from repair")
+                
+                # 2. Automatically reassign to previous employee if found
+                from ui.components import Toast
+                if prev_assign:
+                    emp_id = prev_assign["employee_id"]
+                    self._assign_repo.assign(
+                        self._item.id, emp_id, 
+                        self._user.get("display_name", "admin"), 
+                        notes="Auto-restored assignment after repair"
+                    )
+                    Toast.show(self, "Item repaired and automatically reassigned to original employee.", "success")
+                else:
+                    Toast.show(self, "Item repaired and is now Available.", "success")
+                    
+                if self._on_change: self._on_change()
+                self._refresh()
+
+            ctk.CTkButton(
+                frame, text="Mark as Repaired & Return",
+                font=get_font(13, "bold"),
+                fg_color=COLORS["primary"], hover_color=COLORS["primary_hover"],
+                text_color=COLORS["bg_app"],
+                corner_radius=8, height=42,
+                command=return_from_repair
+            ).pack(anchor="w")
+            return
+
+        ctk.CTkLabel(frame, text="Assign To Technician/Employee", font=get_font(11),
+                     text_color=COLORS["text_secondary"]).pack(anchor="w", pady=(0, 4))
+        
+        from data.repositories.employee_repo import EmployeeRepository
+        emps = EmployeeRepository().get_all(status="active")
+        emp_map = {f"{e.full_name}" + (f" ({e.department_name})" if e.department_name else ""): e.id for e in emps}
+        emp_display = list(emp_map.keys())
+        
+        self._repair_emp_var = ctk.StringVar(value=emp_display[0] if emp_display else "")
+        self._repair_emp_combo = ctk.CTkComboBox(
+            frame, values=emp_display if emp_display else ["No employees found"],
+            variable=self._repair_emp_var,
+            fg_color=COLORS["bg_input"], border_color=COLORS["border"],
+            text_color=COLORS["text_primary"], font=get_font(13),
+            corner_radius=8, height=42, state="readonly"
+        )
+        self._repair_emp_combo.pack(fill="x", pady=(0, 16))
+        
+        if emp_display:
+            from ui.components.ctk_scrollable_dropdown import CTkScrollableDropdown
+            CTkScrollableDropdown(
+                self._repair_emp_combo, values=emp_display,
+                command=lambda v: (self._repair_emp_var.set(v), self._repair_emp_combo.set(v)),
+                autocomplete=True, justify="left", height=200,
+                fg_color=COLORS["bg_card"], button_color=COLORS["bg_surface"],
+                hover_color=COLORS["bg_hover"], text_color=COLORS["text_primary"],
+                frame_border_color=COLORS["border"], scrollbar_button_color=COLORS["border"],
+                font=get_font(13),
+            )
+
+        ctk.CTkLabel(frame, text="Repair Reason / Notes", font=get_font(11),
+                     text_color=COLORS["text_secondary"]).pack(anchor="w", pady=(0, 4))
+        self._repair_notes = ctk.CTkTextbox(
+            frame, height=70,
+            fg_color=COLORS["bg_input"], border_color=COLORS["border"],
+            text_color=COLORS["text_primary"], font=get_font(12), corner_radius=8
+        )
+        self._repair_notes.pack(fill="x", pady=(0, 16))
+
+        def send_to_repair():
+            emp_name = self._repair_emp_var.get()
+            emp_id = emp_map.get(emp_name)
+            if not emp_id:
+                return
+            notes = self._repair_notes.get("1.0", "end").strip()
+            
+            assign_notes = f"[REPAIR] {notes}" if notes else "[REPAIR]"
+            self._assign_repo.assign(
+                self._item.id, emp_id, self._user.get("display_name", "admin"), notes=assign_notes
+            )
+            
+            statuses = self._item_repo.get_statuses()
+            repair_status = next((s for s in statuses if s["name"] == "under_repair"), None)
+            if repair_status:
+                self._item_repo.update_status(self._item.id, repair_status["id"], notes=notes if notes else None)
+                if notes: self._item.notes = notes
+                
+                self._audit.log(
+                    "status_change", "item", self._item.id,
+                    before={"status_id": self._item.status_id, "status": self._item.status_name, "notes": self._item.notes},
+                    after={"status_id": repair_status["id"], "status": "under_repair", "notes": notes},
+                    performed_by=self._user.get("display_name", "admin")
+                )
+            
+            from ui.components import Toast
+            Toast.show(self, f"Item sent to repair.", "warning")
+            if self._on_change: self._on_change()
+            self._refresh()
+
+        ctk.CTkButton(
+            frame, text="Send to Repair",
+            font=get_font(13, "bold"),
+            fg_color=COLORS["warning"], hover_color=COLORS["warning_dim"],
+            text_color=COLORS["bg_app"],
+            corner_radius=8, height=42,
+            command=send_to_repair
+        ).pack(anchor="w")
 
     def _edit_item(self):
         from ui.inventory.item_form import ItemFormDialog

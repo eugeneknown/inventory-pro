@@ -353,6 +353,7 @@ class ItemFormDialog(ctk.CTkToplevel):
             corner_radius=8, height=36, width=90, state="readonly"
         )
         self._storage_type_combo.grid(row=1, column=2, padx=(8, 0), pady=(2, 0))
+        from ui.components.ctk_scrollable_dropdown import CTkScrollableDropdown
         CTkScrollableDropdown(
             self._storage_type_combo, values=["SSD", "HDD"],
             command=lambda v: (self._storage_type_var.set(v), self._storage_type_combo.set(v)),
@@ -531,9 +532,11 @@ class ItemFormDialog(ctk.CTkToplevel):
                 w.insert(0, val)
         if i.category_name:
             self._cat_var.set(i.category_name)
+            self._cat_menu.set(i.category_name)
             self._on_category_change(i.category_name)
         if i.status_name:
             self._status_var.set(i.status_name)
+            self._status_combo.set(i.status_name)
 
     # ── Save ──────────────────────────────────────────────────────────────────
     def _save(self):

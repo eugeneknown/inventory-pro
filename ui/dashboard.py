@@ -122,25 +122,58 @@ class DashboardPage(ctk.CTkFrame):
             dot = ctk.CTkLabel(item_frame, text="●", font=get_font(10), text_color=color)
             dot.pack(side="left", padx=(12, 8), pady=10)
 
-            # Extract human-readable name from state JSON if possible
+            # Extract human-readable name from state JSON or repositories
             display_name = row["entity_type"].title()
+            
+            def get_item_name(i_id):
+                if not i_id: return "Item"
+                if not hasattr(self, "_item_cache"): 
+                    from data.repositories.item_repo import ItemRepository
+                    self._item_repo = ItemRepository()
+                    self._item_cache = {}
+                if i_id not in self._item_cache:
+                    i = self._item_repo.get_by_id(i_id)
+                    self._item_cache[i_id] = i.name if i else "Unknown Item"
+                return self._item_cache[i_id]
+
+            def get_emp_name(e_id):
+                if not e_id: return "Employee"
+                if not hasattr(self, "_emp_cache"):
+                    from data.repositories.employee_repo import EmployeeRepository
+                    self._emp_repo = EmployeeRepository()
+                    self._emp_cache = {}
+                if e_id not in self._emp_cache:
+                    emp = self._emp_repo.get_by_id(e_id)
+                    self._emp_cache[e_id] = emp.full_name if emp else "Unknown Employee"
+                return self._emp_cache[e_id]
+
             try:
                 state_str = row["after_state"] or row["before_state"]
                 if state_str:
                     import json
                     state = json.loads(state_str)
-                    if row["entity_type"] == "employee":
+                    
+                    if action == "assign":
+                        i_name = get_item_name(state.get("item_id"))
+                        e_name = get_emp_name(state.get("employee_id"))
+                        display_name = f"'{i_name}' to {e_name}"
+                    elif action == "return":
+                        i_name = get_item_name(state.get("item_id"))
+                        e_name = get_emp_name(state.get("employee_id"))
+                        display_name = f"'{i_name}' from {e_name}"
+                    elif action == "status_change":
+                        i_name = get_item_name(row["entity_id"])
+                        display_name = f"'{i_name}' status"
+                    elif row["entity_type"] == "employee":
                         display_name = state.get("full_name") or display_name
                     elif row["entity_type"] == "item":
                         display_name = state.get("name") or state.get("model") or display_name
-                    elif row["entity_type"] == "assignment":
-                        display_name = "Assignment"
             except Exception:
                 pass
 
             ctk.CTkLabel(
                 item_frame,
-                text=f"{action.replace('_', ' ').upper()}  {display_name}",
+                text=f"{action.replace('_', ' ').title()} {display_name}",
                 font=get_font(11, "bold"),
                 text_color=COLORS["text_primary"]
             ).pack(side="left")

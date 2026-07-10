@@ -218,13 +218,19 @@ class ItemRepository:
         conn.close()
         return self.get_by_id(item_id)
 
-    def update_status(self, item_id: str, status_id: str) -> Optional[Item]:
+    def update_status(self, item_id: str, status_id: str, notes: Optional[str] = None) -> Optional[Item]:
         conn = get_connection()
         now = datetime.utcnow().isoformat()
-        conn.execute(
-            "UPDATE items SET status_id=?, updated_at=?, sync_status='pending' WHERE id=?",
-            (status_id, now, item_id)
-        )
+        if notes is not None:
+            conn.execute(
+                "UPDATE items SET status_id=?, notes=?, updated_at=?, sync_status='pending' WHERE id=?",
+                (status_id, notes, now, item_id)
+            )
+        else:
+            conn.execute(
+                "UPDATE items SET status_id=?, updated_at=?, sync_status='pending' WHERE id=?",
+                (status_id, now, item_id)
+            )
         conn.commit()
         conn.close()
         return self.get_by_id(item_id)

@@ -107,6 +107,11 @@ class SearchBar(ctk.CTkFrame):
     def get(self) -> str:
         return self._var.get()
 
+    def set(self, value: str):
+        self._var.set(value)
+        if self._on_change:
+            self._on_change(value)
+
     def clear(self):
         self._var.set("")
 

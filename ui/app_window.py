@@ -5,6 +5,7 @@ Sidebar navigation + content frame switcher.
 import customtkinter as ctk
 from utils.theme import COLORS, get_font
 from sync.sync_manager import SyncManager, SyncState
+from utils.barcode_listener import BarcodeListener
 
 
 NAV_ITEMS = [
@@ -40,6 +41,10 @@ class AppWindow(ctk.CTk):
 
         # Listen for sync state changes
         self._sync._on_state_change = self._on_sync_state
+
+        # Start global barcode scanner listener
+        self._barcode_listener = BarcodeListener(self, on_scan=self._on_barcode_scan)
+        self._barcode_listener.start()
 
     # ── Layout ────────────────────────────────────────────────────────────────
     def _build_layout(self):
@@ -192,8 +197,9 @@ class AppWindow(ctk.CTk):
         for w in self._content.winfo_children():
             w.destroy()
 
-        # Load page
+        # Load page and cache reference for external access (e.g. barcode scanner)
         page = self._get_page(page_id)
+        self._pages[page_id] = page
         page.pack(fill="both", expand=True, padx=24, pady=20)
 
     def _get_page(self, page_id: str):
@@ -242,6 +248,12 @@ class AppWindow(ctk.CTk):
             pass
 
     def _logout(self):
+        from data.database import get_connection
+        conn = get_connection()
+        conn.execute("DELETE FROM app_settings WHERE key = 'remember_user_id'")
+        conn.commit()
+        conn.close()
+
         from ui.login import LoginScreen
         # Recreate login overlay
         LoginScreen(self, on_login_success=self._on_relogin)
@@ -249,3 +261,61 @@ class AppWindow(ctk.CTk):
     def _on_relogin(self, user: dict):
         self._user = user
         self._navigate("dashboard")
+
+    # ── Barcode Scanner Handler ───────────────────────────────────────────────
+    def _on_barcode_scan(self, serial: str):
+        """
+        Called by BarcodeListener when a barcode scanner input is detected.
+        1. If an ItemFormDialog is open → inject serial into its SN field.
+        2. Else if serial exists in DB → navigate to Inventory and search it.
+        3. Else → open Add Item dialog with SN pre-filled.
+        """
+        print(f"[Barcode] Scanned: {serial}")
+
+        # 1. Check if an ItemFormDialog is currently open
+        from ui.inventory.item_form import ItemFormDialog
+        for widget in self.winfo_children():
+            if isinstance(widget, ItemFormDialog):
+                sn_field = widget._fields.get("serial_number")
+                if sn_field:
+                    sn_field.delete(0, "end")
+                    sn_field.insert(0, serial)
+                    widget.lift()
+                    widget.focus_force()
+                    from ui.components import Toast
+                    Toast.show(self, f"Serial number filled: {serial}", "success")
+                return
+
+        # 2. Check the database
+        from data.repositories.item_repo import ItemRepository
+        repo = ItemRepository()
+        item = repo.get_by_serial(serial)
+
+        from ui.components import Toast
+
+        if item:
+            # Item found — navigate to inventory and search
+            self._navigate("inventory")
+            self.after(100, lambda: self._inject_inventory_search(serial))
+        else:
+            # Item not found — open Add Item form with SN pre-filled
+            self._navigate("inventory")
+            self.after(100, lambda: self._open_add_with_serial(serial))
+
+    def _inject_inventory_search(self, serial: str):
+        """Push a serial number into the active Inventory page's search bar."""
+        page = self._pages.get("inventory")
+        if page and hasattr(page, "scan_search"):
+            page.scan_search(serial)
+
+    def _open_add_with_serial(self, serial: str):
+        """Open the Add Item dialog pre-filled with a serial number."""
+        from ui.inventory.item_form import ItemFormDialog
+        from ui.components import Toast
+        Toast.show(self, f"New item — serial '{serial}' pre-filled.", "info")
+        ItemFormDialog(
+            self._content,
+            user=self._user,
+            prefill_serial=serial,
+            on_save=lambda: self._pages.get("inventory") and self._pages["inventory"]._load()
+        )

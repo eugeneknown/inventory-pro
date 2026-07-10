@@ -37,6 +37,8 @@ def generate_label_pdf(items: list[dict], org_name: str = "InventoryPro") -> str
     Returns the path to the generated PDF.
     """
     os.makedirs(LABELS_DIR, exist_ok=True)
+    _cleanup_old_labels(max_files=10)
+    
     from datetime import datetime
     filename = f"labels_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
     pdf_path = os.path.join(LABELS_DIR, filename)
@@ -63,6 +65,22 @@ def generate_label_pdf(items: list[dict], org_name: str = "InventoryPro") -> str
     c.save()
     print(f"[Labels] PDF saved: {pdf_path}")
     return pdf_path
+
+
+def _cleanup_old_labels(max_files=10):
+    """Delete old generated label PDFs to save disk space, keeping only the most recent."""
+    if not os.path.exists(LABELS_DIR):
+        return
+    try:
+        pdfs = [os.path.join(LABELS_DIR, f) for f in os.listdir(LABELS_DIR) if f.endswith(".pdf")]
+        pdfs.sort(key=os.path.getmtime, reverse=True)
+        for old_pdf in pdfs[max_files:]:
+            try:
+                os.remove(old_pdf)
+            except OSError:
+                pass
+    except Exception:
+        pass
 
 
 def _draw_label(c: canvas.Canvas, x: float, y: float,

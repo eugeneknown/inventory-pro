@@ -194,7 +194,7 @@ class AuditLogPage(ctk.CTkFrame):
             ).pack(side="left", padx=(10, 0))
 
             # Details (before → after summary)
-            detail = self._summarize(entry.action_type, entry.before_state, entry.after_state)
+            detail = self._summarize(entry)
             ctk.CTkLabel(
                 row, text=detail,
                 font=get_font(10),
@@ -224,34 +224,61 @@ class AuditLogPage(ctk.CTkFrame):
             else:
                 ctk.CTkLabel(row, text="", width=78).pack(side="left")
 
-    def _summarize(self, action: str, before_str: str, after_str: str) -> str:
+    def _summarize(self, entry) -> str:
         """Create a short human-readable summary of what changed."""
         try:
-            before = json.loads(before_str) if before_str else {}
-            after = json.loads(after_str) if after_str else {}
+            before = json.loads(entry.before_state) if entry.before_state else {}
+            after = json.loads(entry.after_state) if entry.after_state else {}
         except Exception:
             return "—"
 
+        def get_item_name(i_id):
+            if not i_id: return "Item"
+            if not hasattr(self, "_item_cache"): self._item_cache = {}
+            if i_id not in self._item_cache:
+                i = self._item_repo.get_by_id(i_id)
+                self._item_cache[i_id] = i.name if i else "Unknown Item"
+            return self._item_cache[i_id]
+
+        def get_emp_name(e_id):
+            if not e_id: return "Employee"
+            if not hasattr(self, "_emp_cache"):
+                from data.repositories.employee_repo import EmployeeRepository
+                self._emp_repo = EmployeeRepository()
+                self._emp_cache = {}
+            if e_id not in self._emp_cache:
+                emp = self._emp_repo.get_by_id(e_id)
+                self._emp_cache[e_id] = emp.full_name if emp else "Unknown Employee"
+            return self._emp_cache[e_id]
+
+        action = entry.action_type
         if action == "create":
             return f"Created: {after.get('name', after.get('full_name', ''))}"
         elif action == "delete":
             return f"Deleted: {before.get('name', before.get('full_name', ''))}"
         elif action == "assign":
-            return f"Assigned item to employee"
+            item_name = get_item_name(after.get("item_id"))
+            emp_name = get_emp_name(after.get("employee_id"))
+            return f"Assigned '{item_name}' to {emp_name}"
         elif action == "return":
-            return f"Item returned"
+            # Return action might have item/emp in before OR after depending on revert state
+            item_id = before.get("item_id") or after.get("item_id")
+            emp_id = before.get("employee_id") or after.get("employee_id")
+            return f"Returned '{get_item_name(item_id)}' from {get_emp_name(emp_id)}"
         elif action == "status_change":
-            old = before.get("status", "?")
-            new = after.get("status", "?")
-            return f"Status: {old} → {new}"
+            item_name = get_item_name(entry.entity_id) if entry.entity_type == "item" else "Item"
+            old = before.get("status", "?").replace("_", " ").title()
+            new = after.get("status", "?").replace("_", " ").title()
+            return f"[{item_name}] Status: {old} → {new}"
         elif action == "update":
             changed = [k for k in after if before.get(k) != after.get(k)]
-            return f"Updated: {', '.join(changed[:3])}" if changed else "Updated"
+            name = after.get("name", after.get("full_name", "Record"))
+            return f"Updated {name}: {', '.join(changed[:3])}" if changed else f"Updated {name}"
         return "—"
 
     def _confirm_revert(self, entry):
         """Show confirmation before reverting."""
-        detail = self._summarize(entry.action_type, entry.before_state, entry.after_state)
+        detail = self._summarize(entry)
         ConfirmDialog(
             self,
             title="Revert Action",

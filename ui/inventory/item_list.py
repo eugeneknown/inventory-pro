@@ -95,10 +95,11 @@ class ItemListPage(ctk.CTkFrame):
         filters = ctk.CTkFrame(self, fg_color="transparent")
         filters.pack(fill="x", pady=(0, 16))
 
-        SearchBar(
+        self._search_bar = SearchBar(
             filters, placeholder="Search by name, serial, brand...",
             on_change=self._on_search
-        ).pack(side="left", fill="x", expand=True, padx=(0, 16))
+        )
+        self._search_bar.pack(side="left", fill="x", expand=True, padx=(0, 16))
 
         cats = self._repo.get_categories()
         FilterDropdown(
@@ -312,8 +313,12 @@ class ItemListPage(ctk.CTkFrame):
                 print("[Import] Errors:\n" + "\n".join(result["errors"]))
             self._load()
 
-    def _on_search(self, q): 
-        print(f"[DEBUG] Search triggered with query: '{q}'")
+    def scan_search(self, serial: str):
+        """Programmatically search for a serial number (called from BarcodeListener)."""
+        self._search_bar.set(serial)
+        self._on_search(serial)
+
+    def _on_search(self, q):
         self._search_query = q
         self._load()
 

@@ -45,3 +45,4 @@ build/
 # Build assets (generated, not source)
 assets/icon.ico
 tools/convert_icon.py
+labels/

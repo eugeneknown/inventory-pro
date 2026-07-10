@@ -138,17 +138,54 @@ class LoginScreen(ctk.CTkFrame):
         )
         self._login_btn.pack(anchor="w")
 
-        # Hint
+        # Remember Me switch + Hint
+        bottom_row = ctk.CTkFrame(inner, fg_color="transparent", width=380)
+        bottom_row.pack(anchor="w", fill="x", pady=(16, 0))
+        
+        self._remember_var = ctk.BooleanVar(value=False)
+        self._remember_switch = ctk.CTkSwitch(
+            bottom_row, text="Remember me",
+            variable=self._remember_var,
+            font=get_font(11), text_color=COLORS["text_secondary"],
+            button_color=COLORS["primary"], button_hover_color=COLORS["primary_hover"],
+            progress_color=COLORS["primary_dim"]
+        )
+        self._remember_switch.pack(side="left")
         ctk.CTkLabel(
-            inner,
-            text="Default: admin  /  admin123",
+            bottom_row,
+            text="Default: admin / admin123",
             font=get_font(10),
             text_color=COLORS["text_muted"]
-        ).pack(anchor="w", pady=(16, 0))
+        ).pack(side="right")
 
         # Keybinds
         self._password.bind("<Return>", lambda e: self._attempt_login())
         self._username.bind("<Return>", lambda e: self._password.focus())
+
+        # Check Auto-Login
+        self.after(50, self._check_auto_login)
+
+    def _check_auto_login(self):
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("SELECT value FROM app_settings WHERE key = 'remember_user_id'")
+        row = c.fetchone()
+        
+        if row and row[0]:
+            # Auto-login flow
+            user_id = row[0]
+            c.execute("SELECT * FROM users WHERE id=? AND is_active=1", (user_id,))
+            user = c.fetchone()
+            conn.close()
+            
+            if user:
+                user_dict = dict(user)
+                self.place_forget()
+                self._on_success(user_dict)
+                return
+        else:
+            conn.close()
+
         self._username.focus()
 
     def _attempt_login(self):
@@ -172,6 +209,16 @@ class LoginScreen(ctk.CTkFrame):
         if user:
             self._error.configure(text="")
             user_dict = dict(user)
+
+            # Save or clear Remember Me
+            conn = get_connection()
+            if self._remember_var.get():
+                conn.execute("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('remember_user_id', ?)", (user_dict["id"],))
+            else:
+                conn.execute("DELETE FROM app_settings WHERE key = 'remember_user_id'")
+            conn.commit()
+            conn.close()
+
             self.place_forget()
             self._on_success(user_dict)
         else:
